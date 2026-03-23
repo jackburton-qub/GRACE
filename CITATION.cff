@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use GRACE in your research, please cite it as below."
+type: software
+title: "GRACE: Genomic Repeat Analysis and Characterisation Engine"
+abstract: >
+  GRACE is a standalone, offline, cross-platform desktop application for
+  SSR (microsatellite) marker development. It integrates SSR detection,
+  Primer3-based primer design, quality filtering, BLAST-based specificity
+  validation, and lab-ready CSV export in a single graphical interface
+  requiring no command-line interaction.
+authors:
+  - family-names: Burton
+    given-names: Jack Patrick
+    affiliation: "School of Biological Sciences, Queen's University Belfast"
+    orcid: "https://orcid.org/0009-0008-5810-6779"
+license: MIT
+repository-code: "https://github.com/jackburton-qub/GRACE"
+version: "1.0.0"
+date-released: "2026-01-06"
+keywords:
+  - microsatellite
+  - SSR
+  - primer design
+  - BLAST
+  - population genetics
+  - bioinformatics

@@ -1,0 +1,56 @@
+# ── Compiled app output ──────────────────────────────────
+dist/
+build/
+*.spec.bak
+
+# ── PyInstaller ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# ── Genome files ─────────────────────────────────────────
+*.fa
+*.fasta
+*.fna
+*.fai
+*.gbk
+*.gff
+*.gff3
+*.gtf
+
+# ── BLAST databases ───────────────────────────────────────
+*.nhr
+*.nin
+*.nsq
+*.nsi
+*.nsd
+*.nos
+*.not
+*.ntf
+*.nto
+grace_blast_*/
+
+# ── Session and autosave files ───────────────────────────
+*.json
+.grace_autosave.json
+grace_session.json
+
+# ── Python environment ───────────────────────────────────
+venv/
+env/
+.env
+*.egg-info/
+.eggs/
+
+# ── OS files ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor files ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
