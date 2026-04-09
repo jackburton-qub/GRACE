@@ -1,4 +1,4 @@
-name: Build Windows and Mac Executables
+name: Build Windows, Mac and Linux Executables
 
 on:
   push:
@@ -26,10 +26,13 @@ jobs:
         run: |
           pyinstaller --onefile --windowed --add-data "assets;assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
 
+      - name: Rename executable
+        run: mv dist/main.exe dist/GRACE-Windows-x64.exe
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: dist/GRACE-Windows-x64.exe
           name: GRACE v1.0.0
 
   build-mac:
@@ -53,8 +56,40 @@ jobs:
           cd mac
           pyinstaller --onedir --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --icon grace_icon.icns main.py
 
+      - name: Rename executable
+        run: mv mac/dist/main.app mac/dist/GRACE-macOS.app
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mac/dist/main.app
+          files: mac/dist/GRACE-macOS.app
+          name: GRACE v1.0.0
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --add-data "assets:assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
+
+      - name: Rename executable
+        run: mv dist/main dist/GRACE-Linux-x64
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GRACE-Linux-x64
           name: GRACE v1.0.0
