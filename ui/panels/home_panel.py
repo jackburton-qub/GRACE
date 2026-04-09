@@ -74,8 +74,8 @@ class GenomeLoadWorker(QThread):
             _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             if _root not in sys.path:
                 sys.path.insert(0, _root)
-            from core.fasta_loader import load_fasta
-            genome = load_fasta(self.path)
+            from core.fasta_loader import load_sequence_file
+            genome = load_sequence_file(self.path)
             self.finished.emit(genome, self.path)
         except Exception as e:
             self.error.emit(str(e))
@@ -111,7 +111,7 @@ class HomePanel(QWidget):
         title = QLabel("Load Genome")
         title.setFont(QFont(FONT_UI, FONT_SIZE_LARGE + 2, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {ACCENT};")
-        sub = QLabel("Select a FASTA file to begin — .fa / .fasta / .fna supported")
+        sub = QLabel("Select a FASTA or FASTQ file to begin — .fa / .fasta / .fna / .fastq / .fq supported")
         sub.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
         L.addWidget(title)
         L.addWidget(sub)
@@ -212,8 +212,8 @@ class HomePanel(QWidget):
     # ---------------------------------------------------------
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select FASTA file", "",
-            "FASTA files (*.fa *.fasta *.fna);;All files (*)"
+            self, "Select sequence file", "",
+            "Sequence files (*.fa *.fasta *.fna *.fastq *.fq);;FASTA files (*.fa *.fasta *.fna);;FASTQ files (*.fastq *.fq);;All files (*)"
         )
         if path:
             self._selected_path = path

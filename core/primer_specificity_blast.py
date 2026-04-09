@@ -13,6 +13,7 @@ This is produced automatically by primers_to_blast_fasta() in primer_design.py.
 
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
@@ -26,7 +27,7 @@ from typing import List, Dict, Any, Optional
 class BlastParams:
     task: str = "blastn-short"
     word_size: int = 7
-    evalue: float = 1000.0
+    evalue: float = 0.001
     reward: int = 1
     penalty: int = -3
     gapopen: int = 5
@@ -150,32 +151,20 @@ PRESET_BLAST = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _run_cmd(cmd: List[str], cwd: Optional[str] = None, timeout: int = 10800) -> str:
-    """Run a shell command, raise RuntimeError on failure, return stdout.
-    timeout: seconds before giving up (default 3 hours — sufficient for large genomes).
-    Set to None to disable entirely.
-    """
-    import sys
-    # On Windows frozen apps, CREATE_NO_WINDOW prevents the subprocess
-    # from inheriting a broken console handle which can cause hangs
+def _run_cmd(cmd: List[str], cwd: Optional[str] = None) -> str:
+    """Run a shell command, raise RuntimeError on failure, return stdout."""
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout if timeout else None,
-            **kwargs,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"Command timed out after {timeout}s: {' '.join(cmd)}"
-        )
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **kwargs,
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\n"
@@ -395,11 +384,7 @@ def check_specificity_blast(
         blastn = os.path.join(blast_bin_dir, "blastn")
         makeblastdb = os.path.join(blast_bin_dir, "makeblastdb")
 
-    import shutil as _shutil
-    # Use explicit temp dir with guaranteed cleanup — more reliable than
-    # TemporaryDirectory in frozen apps where cleanup can be delayed
-    tmpdir = tempfile.mkdtemp(prefix="grace_blast_")
-    try:
+    with tempfile.TemporaryDirectory() as tmpdir:
         db_prefix = os.path.join(tmpdir, "genome_db")
         primers_fa = os.path.join(tmpdir, "primers.fasta")
         out_tab = os.path.join(tmpdir, "blast_out.tsv")
@@ -433,25 +418,19 @@ def check_specificity_blast(
             "-soft_masking", blast_params.soft_masking,
         ])
 
-        hits = _parse_blast_tab(out_tab)
-    finally:
-        # Always clean up temp dir — even if BLAST fails or times out
-        try:
-            _shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+        hits_raw = _parse_blast_tab(out_tab)
 
-        # Log hit counts to stderr for debugging — visible in terminal/launcher
+        # Log hit counts to stderr for debugging
         import sys
-        total_hits = len(hits)
-        unique_queries = len({h["qseqid"] for h in hits})
+        total_hits = len(hits_raw)
+        unique_queries = len({h["qseqid"] for h in hits_raw})
         print(
             f"[specificity] BLAST returned {total_hits} raw hits "
             f"across {unique_queries} unique query sequences",
             file=sys.stderr,
         )
         if total_hits > 0:
-            sample = hits[0]
+            sample = hits_raw[0]
             print(
                 f"[specificity] Sample hit — qseqid={sample['qseqid']!r}, "
                 f"sseqid={sample['sseqid']!r}, pident={sample['pident']}, "
@@ -460,7 +439,9 @@ def check_specificity_blast(
                 file=sys.stderr,
             )
 
-        paired = _pair_hits(hits, specificity_params)
+    # hits_raw is now in outer scope — safe after finally cleanup
+    hits = hits_raw
+    paired = _pair_hits(hits, specificity_params)
 
     # Merge specificity results back into primer_results by ssr_id
     out: List[Dict[str, Any]] = []

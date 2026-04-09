@@ -182,7 +182,7 @@ class SpecificityPanel(QWidget):
 
         sg.addWidget(_lbl("E-value",
             "Maximum E-value for a BLAST hit to be reported.\n0.001 is standard for primer specificity checking."), 4, 2)
-        self.evalue = QDoubleSpinBox(); self.evalue.setRange(0.0001, 1.0); self.evalue.setValue(0.001); self.evalue.setSingleStep(0.001); self.evalue.setDecimals(4)
+        self.evalue = QDoubleSpinBox(); self.evalue.setDecimals(4); self.evalue.setRange(0.0001, 1.0); self.evalue.setSingleStep(0.001); self.evalue.setValue(0.001)
         sg.addWidget(self.evalue, 4, 3)
 
         sg.addWidget(_lbl("Dust filter",

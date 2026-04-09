@@ -20,6 +20,29 @@ from ui.style import (
 )
 
 
+
+def _clean_df(df):
+    """Remove nested/messy columns before CSV export."""
+    import pandas as pd
+    exclude = {"amplicons", "left_hits", "right_hits", "pass_mode"}
+    cols = [c for c in df.columns if c not in exclude]
+    out = df[cols].copy()
+    # Rename to human-readable
+    rename = {
+        "ssr_id": "SSR ID", "pair_rank": "Pair rank",
+        "specificity_status": "Status", "contig": "Contig",
+        "motif": "Motif", "canonical_motif": "Canonical motif",
+        "repeat_count": "Repeat count", "start": "Start (bp)", "end": "End (bp)",
+        "left_primer": "Forward primer", "right_primer": "Reverse primer",
+        "product_size": "Product size (bp)",
+        "left_tm": "Forward Tm (C)", "right_tm": "Reverse Tm (C)",
+        "left_gc": "Forward GC (%)", "right_gc": "Reverse GC (%)",
+        "left_3end_dg": "Forward 3' stability (kcal/mol)",
+        "right_3end_dg": "Reverse 3' stability (kcal/mol)",
+        "left_gc_clamp": "Forward GC clamp", "right_gc_clamp": "Reverse GC clamp",
+    }
+    return out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
+
 class ResultsPanel(QWidget):
     def __init__(self, state, main_window):
         super().__init__()
@@ -282,12 +305,39 @@ class ResultsPanel(QWidget):
         import pandas as pd
         return pd.DataFrame(self.state.specificity_results)
 
+    def _clean_df(self, df):
+        """Remove internal columns and rename for clean CSV output."""
+        exclude = {"amplicons", "left_hits", "right_hits", "pass_mode",
+                   "left_gc_clamp", "right_gc_clamp"}
+        rename = {
+            "ssr_id":             "SSR ID",
+            "pair_rank":          "Pair rank",
+            "specificity_status": "Status",
+            "contig":             "Contig",
+            "start":              "Start (bp)",
+            "end":                "End (bp)",
+            "motif":              "Motif",
+            "canonical_motif":    "Canonical motif",
+            "repeat_count":       "Repeat count",
+            "left_primer":        "Forward primer",
+            "right_primer":       "Reverse primer",
+            "product_size":       "Product size (bp)",
+            "left_tm":            "Forward Tm (°C)",
+            "right_tm":           "Reverse Tm (°C)",
+            "left_gc":            "Forward GC (%)",
+            "right_gc":           "Reverse GC (%)",
+            "left_3end_dg":       "Forward 3' stability (kcal/mol)",
+            "right_3end_dg":      "Reverse 3' stability (kcal/mol)",
+        }
+        cols = [col for col in df.columns if col not in exclude]
+        return df[cols].rename(columns=rename)
+
     def _download_full(self):
         df = self._get_display_df()
         if df is None: return
         path, _ = QFileDialog.getSaveFileName(self, "Save full results", "specificity_results.csv", "CSV files (*.csv)")
         if path:
-            df.to_csv(path, index=False, encoding="utf-8-sig")
+            self._clean_df(df).to_csv(path, index=False, encoding="utf-8-sig")
             self.mw.set_status(f"Saved to {path}")
 
     def _download_pass(self):
@@ -295,7 +345,7 @@ class ResultsPanel(QWidget):
         if df is None: return
         path, _ = QFileDialog.getSaveFileName(self, "Save PASS primers", "pass_primers.csv", "CSV files (*.csv)")
         if path:
-            df[df["specificity_status"] == "PASS"].to_csv(path, index=False, encoding="utf-8-sig")
+            self._clean_df(df[df["specificity_status"] == "PASS"]).to_csv(path, index=False, encoding="utf-8-sig")
             self.mw.set_status(f"Saved to {path}")
 
     def _download_raw(self):
