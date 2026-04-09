@@ -51,10 +51,10 @@ jobs:
       - name: Build executable
         run: |
           cd mac
-          pyinstaller --onefile --windowed --add-data "assets:assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --icon grace_icon.icns main.py
+          pyinstaller --onedir --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --icon grace_icon.icns main.py
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mac/dist/*.app
+          files: mac/dist/main.app
           name: GRACE v1.0.0
