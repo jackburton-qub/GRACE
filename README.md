@@ -73,16 +73,6 @@ See also [CITATION.cff](CITATION.cff) for machine-readable citation information.
 
 ---
 
-## Validation
-
-GRACE was validated on the sugar kelp genome (*Saccharina latissima*; NCBI accession GCA_034768055.1; 251,166 contigs):
-
-- SSR detection concordant with Krait2 at identical 1-based coordinates
-- 278 primer pairs passed single-locus BLAST specificity (trinucleotide SSRs)
-- 12 primer pairs showed complete sequence identity with Krait2-validated designs
-
----
-
 ## Dependencies
 
 | Package | Purpose |
