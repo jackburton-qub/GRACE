@@ -67,7 +67,7 @@ Session data can be saved and restored via the Home page.
 
 If you use GRACE in your research, please cite:
 
-> Burton, J.P. & [Supervisor name] (2026) GRACE: an integrated offline desktop application for microsatellite detection, primer design, and BLAST-based specificity validation. *Molecular Ecology Resources*. DOI: [XXXX]
+> Burton, J.P. (2026) GRACE: an integrated offline desktop application for microsatellite detection, primer design, and BLAST-based specificity validation. Journal Name, Issue, Volume, Pages. DOI: [XXXX]
 
 See also [CITATION.cff](CITATION.cff) for machine-readable citation information.
 
