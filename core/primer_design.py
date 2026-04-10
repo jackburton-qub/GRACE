@@ -1,8 +1,6 @@
 """
 Primer Design Module (backend-safe)
 -----------------------------------
-Provides strict, recommended, and relaxed primer3 presets.
-Allows full override of any primer3 parameter.
 
 Specificity is NOT integrated here by design.
 Primers can be exported in BLAST-ready FASTA format.
