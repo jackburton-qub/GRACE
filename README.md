@@ -5,20 +5,9 @@ GRACE is a standalone, offline, cross-platform desktop application for SSR (micr
 
 ---
 
-## Features
-
-- **SSR Detection** — compiled regex-based scanning with multiprocessing, handles highly fragmented assemblies efficiently
-- **Primer Design** — full Primer3 integration with user-configurable parameters
-- **Quality Filtering** — 3′ end stability (SantaLucia 1998) and GC clamp filters before BLAST
-- **Specificity Checking** — BLAST-based in silico PCR against your local genome
-- **Offline** — works entirely offline; supports unpublished and proprietary genome assemblies
-- **Cross-platform** — Windows, macOS, Linux
-
----
-
 ## Installation
 
-### Pre-built binaries (recommended)
+### Pre-built binaries
 
 Download the latest release for your platform from the [Releases](../../releases) page. No installation required — extract the folder and run `GRACE.exe` (Windows) or `GRACE` (Mac/Linux).
 
@@ -26,52 +15,6 @@ Download the latest release for your platform from the [Releases](../../releases
 
 - **BLAST+** must be installed separately and either placed on your system PATH or the bin directory specified within the application.
   - Download: https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/
-
-### Running from source
-
-```bash
-git clone https://github.com/jackburton-qub/GRACE.git
-cd GRACE
-pip install -r requirements.txt
-python main.py
-```
-
-Python 3.12 required.
-
----
-
-## Building from source
-
-```bash
-pip install pyinstaller
-python build.py
-```
-
-Output will be in `dist/GRACE/`.
-
----
-
-## Usage
-
-1. **Load Genome** — select a FASTA file (.fa / .fasta / .fna)
-2. **Detect SSRs** — configure motif lengths and repeat thresholds, run detection
-3. **Design Primers** — set Primer3 parameters, design for all SSRs or a selected subset
-4. **Check Specificity** — run BLAST against your genome to validate primer specificity
-5. **BLAST Results** — view and download PASS primers as a lab-ready CSV
-
-Session data can be saved and restored via the Home page.
-
----
-
-## Citation
-
-If you use GRACE in your research, please cite:
-
-> Burton, J.P. (2026) GRACE: an integrated offline desktop application for microsatellite detection, primer design, and BLAST-based specificity validation. Journal Name, Issue, Volume, Pages. DOI: [XXXX]
-
-See also [CITATION.cff](CITATION.cff) for machine-readable citation information.
-
----
 
 ## Dependencies
 
@@ -89,10 +32,3 @@ See also [CITATION.cff](CITATION.cff) for machine-readable citation information.
 
 MIT — see [LICENSE](LICENSE) for details.
 
----
-
-## Author
-
-Jack Patrick Burton  
-School of Biological Sciences, Queen's University Belfast  
-[QUB email]
