@@ -48,24 +48,26 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: |
-          pip install -r mac/requirements.txt
+        run: pip install -r mac/requirements.txt
 
       - name: Build executable
         run: |
-          cd mac
-          pyinstaller --onedir --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --icon grace_icon.icns main.py
-
-      - name: Rename app bundle
-        run: mv mac/dist/main.app mac/dist/GRACE-macOS.app
+          pyinstaller --onedir --windowed \
+            --name GRACE-macOS \
+            --add-data "assets:assets" \
+            --hidden-import primer3 \
+            --hidden-import primer3.bindings \
+            --collect-all primer3 \
+            --icon mac/grace_icon.icns \
+            main.py
 
       - name: Zip app bundle
-        run: zip -r mac/dist/GRACE-macOS.zip mac/dist/GRACE-macOS.app
+        run: zip -r dist/GRACE-macOS.zip dist/GRACE-macOS.app
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mac/dist/GRACE-macOS.zip
+          files: dist/GRACE-macOS.zip
           name: GRACE v1.0.0
 
   build-linux:
