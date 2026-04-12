@@ -53,7 +53,7 @@ jobs:
       - name: Build executable
         run: |
           cd mac
-          pyinstaller --onefile --windowed --add-data "assets:assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
+          pyinstaller --onefile --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
 
       - name: Rename executable
         run: mv mac/dist/main mac/dist/GRACE-macOS
