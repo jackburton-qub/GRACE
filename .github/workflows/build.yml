@@ -53,15 +53,15 @@ jobs:
       - name: Build executable
         run: |
           cd mac
-          pyinstaller --onefile --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
+          pyinstaller --onedir --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --name GRACE-macOS main.py
 
-      - name: Rename executable
-        run: mv mac/dist/main mac/dist/GRACE-macOS
+      - name: Zip app bundle
+        run: ditto -c -k --sequesterRsrc --keepParent mac/dist/GRACE-macOS.app mac/dist/GRACE-macOS.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mac/dist/GRACE-macOS
+          files: mac/dist/GRACE-macOS.zip
           name: GRACE v1.0.0
 
   build-linux:
