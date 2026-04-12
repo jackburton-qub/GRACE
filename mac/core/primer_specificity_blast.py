@@ -452,7 +452,7 @@ def check_specificity_blast(
     out: List[Dict[str, Any]] = []
     for p in primer_results:
         ssr_id = p.get("ssr_id")
-        spec = paired.get(ssr_id)
+        spec = paired.get(ssr_id) or paired.get(int(ssr_id) if str(ssr_id).isdigit() else ssr_id)
         if spec is None:
             merged = dict(p)
             merged["specificity_status"] = "UNKNOWN"
