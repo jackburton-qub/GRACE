@@ -86,7 +86,12 @@ jobs:
         run: pyinstaller GRACE_mac.spec
 
       - name: Zip app bundle
-        run: ditto -c -k --sequesterRsrc --keepParent dist/GRACE/GRACE.app dist/GRACE-macOS.zip
+        run: |
+          if [ -d "dist/GRACE/GRACE.app" ]; then
+            ditto -c -k --sequesterRsrc --keepParent dist/GRACE/GRACE.app dist/GRACE-macOS.zip
+          else
+            ditto -c -k --sequesterRsrc --keepParent dist/GRACE.app dist/GRACE-macOS.zip
+          fi
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2

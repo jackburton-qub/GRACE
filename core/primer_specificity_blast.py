@@ -28,20 +28,38 @@ def get_blast_bin_dir() -> str:
     Return the directory containing bundled BLAST binaries.
 
     Priority order:
-      1. PyInstaller frozen bundle  → <_MEIPASS>/blast/
-      2. Development (source)       → <project_root>/blast/
+      1. PyInstaller frozen bundle  → tries multiple known locations
+      2. Development (source)       → <project_root>/blast/<platform>/
       3. System PATH fallback       → empty string (let OS resolve)
     """
-    if getattr(sys, "frozen", False):
-        # Running as a PyInstaller bundle
-        base = sys._MEIPASS
+    if sys.platform == "win32":
+        subfolder = "windows"
+    elif sys.platform == "darwin":
+        subfolder = "mac"
     else:
-        # Running from source — go up to project root
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        subfolder = "linux"
 
-    bundled = os.path.join(base, "blast")
-    if os.path.isdir(bundled):
-        return bundled
+    if getattr(sys, "frozen", False):
+        # PyInstaller 6.x puts bundled files in _internal/ next to the .exe
+        # sys._MEIPASS points to _internal/ but let's check both locations
+        candidates = [
+            # Standard _MEIPASS location
+            os.path.join(sys._MEIPASS, "blast", subfolder),
+            # Relative to the exe itself (PyInstaller 6.x onedir)
+            os.path.join(os.path.dirname(sys.executable), "_internal", "blast", subfolder),
+            # Directly next to exe (older PyInstaller behaviour)
+            os.path.join(os.path.dirname(sys.executable), "blast", subfolder),
+        ]
+    else:
+        # Running from source — go up to project root from core/
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        candidates = [
+            os.path.join(project_root, "blast", subfolder),
+        ]
+
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
 
     # Fall back to system PATH
     return ""
@@ -248,7 +266,7 @@ def _parse_blast_tab(path: str) -> List[Dict[str, Any]]:
                 "send": int(send),
                 "evalue": float(evalue),
                 "bitscore": float(bitscore),
-                "sstrand": sstrand.strip(),  # strip trailing whitespace/newlines
+                "sstrand": sstrand.strip(),
             })
     return hits
 
@@ -259,35 +277,19 @@ def _pair_hits(
 ) -> Dict[str, Dict[str, Any]]:
     """
     Pair left and right primer hits into amplicons and assess specificity.
-
-    Expects query IDs in the format: SSR{ssr_id}|L  and  SSR{ssr_id}|R
-    Uses "|" as the delimiter to safely split SSR ID from strand label.
-
-    pass_mode="amplicons" (default):
-        PASS = exactly 1 in-range amplicon formed by the primer pair.
-        Multiple primers hitting multiple genomic locations is tolerated
-        provided only one valid amplicon is produced.
-
-    pass_mode="hits":
-        PASS = each individual primer maps to at most max_total_hits
-        locations AND exactly 1 in-range amplicon is formed.
-        This is stricter: a primer that matches elsewhere in the genome
-        (even without forming an amplicon) will cause a FAIL.
     """
     by_query: Dict[str, List[Dict]] = {}
     for h in hits:
         by_query.setdefault(h["qseqid"], []).append(h)
 
-    # Recover unique SSR IDs by splitting on "|"
     ssr_ids = set()
     for q in by_query.keys():
         if "|" in q:
-            ssr_ids.add(q.rsplit("|", 1)[0])  # e.g. "SSR42|L" → "SSR42"
+            ssr_ids.add(q.rsplit("|", 1)[0])
 
     results: Dict[str, Dict[str, Any]] = {}
 
     def _good(h, sp):
-        """Return True if a BLAST hit passes the quality thresholds."""
         return (
             h["length"]   >= sp.min_align_len
             and h["mismatch"] <= sp.max_mismatches
@@ -295,7 +297,6 @@ def _pair_hits(
         )
 
     def _unique_locations(hit_list):
-        """Count distinct (contig, strand, start) locations in a hit list."""
         return {(h["sseqid"], h["sstrand"], h["sstart"]) for h in hit_list}
 
     for ssr_key in ssr_ids:
@@ -310,7 +311,6 @@ def _pair_hits(
         n_left_hits     = len(left_locations)
         n_right_hits    = len(right_locations)
 
-        # Guard against O(n²) explosion on repetitive genomes
         MAX_HITS_PER_SIDE = 200
         left_search  = left_hits[:MAX_HITS_PER_SIDE]
         right_search = right_hits[:MAX_HITS_PER_SIDE]
@@ -333,19 +333,14 @@ def _pair_hits(
 
         n_amplicons = len(amplicons)
 
-        # ── Determine PASS/FAIL ──────────────────────────────
         if specificity.pass_mode == "hits":
-            # Strict: each primer must map to <= max_total_hits locations
-            # AND exactly one valid amplicon must be formed
             hits_ok = (
                 n_left_hits  <= specificity.max_total_hits
                 and n_right_hits <= specificity.max_total_hits
             )
             amplicon_ok = n_amplicons == 1
             status = "PASS" if (hits_ok and amplicon_ok) else "FAIL"
-
         else:
-            # Default "amplicons" mode: only the number of formed amplicons matters
             if n_amplicons == 0:
                 status = "FAIL"
             elif not specificity.allow_offtarget_amplicons:
@@ -357,7 +352,6 @@ def _pair_hits(
                 )
                 status = "PASS" if ok else "FAIL"
 
-        # Strip "SSR" prefix to recover numeric ssr_id for merging
         numeric_id_str = ssr_key[3:] if ssr_key.startswith("SSR") else ssr_key
         try:
             numeric_id = int(numeric_id_str)
@@ -402,8 +396,7 @@ def check_specificity_blast(
                        If None, automatically resolves bundled or system BLAST.
 
     Returns:
-        List of primer result dicts with added keys:
-            specificity_status, amplicons, left_hits, right_hits
+        List of primer result dicts with added specificity keys.
     """
     if blast_params is None:
         blast_params = BlastParams()
@@ -412,7 +405,7 @@ def check_specificity_blast(
 
     exe_suffix = ".exe" if sys.platform == "win32" else ""
 
-    # Resolve BLAST binary directory — prefer explicit override, then bundled, then PATH
+    # Resolve BLAST binary directory
     resolved_bin_dir = blast_bin_dir or get_blast_bin_dir()
 
     if resolved_bin_dir:
@@ -427,17 +420,12 @@ def check_specificity_blast(
         primers_fa = os.path.join(tmpdir, "primers.fasta")
         out_tab    = os.path.join(tmpdir, "blast_out.tsv")
 
-        # Normalise genome path — strip accidental whitespace
         genome_fasta = genome_fasta.strip()
 
-        # Copy genome into the temp directory so BLAST never sees a path
-        # with spaces. Some BLAST+ versions on Windows misparse spaced paths
-        # even when passed as a list argument, so this is the safest fix.
         genome_local = os.path.join(tmpdir, "genome.fasta")
         import shutil as _shutil
         _shutil.copy2(genome_fasta, genome_local)
 
-        # Build BLAST database against the local copy
         _run_cmd([
             makeblastdb,
             "-in", genome_local,
@@ -445,10 +433,8 @@ def check_specificity_blast(
             "-out", db_prefix,
         ])
 
-        # Write primer FASTA
         _write_primers_fasta(primer_results, primers_fa)
 
-        # Run BLAST
         _run_cmd([
             blastn,
             "-task", blast_params.task,
@@ -468,10 +454,8 @@ def check_specificity_blast(
 
         hits_raw = _parse_blast_tab(out_tab)
 
-    hits = hits_raw
-    paired = _pair_hits(hits, specificity_params)
+    paired = _pair_hits(hits_raw, specificity_params)
 
-    # Merge specificity results back into primer_results by ssr_id
     out: List[Dict[str, Any]] = []
     for p in primer_results:
         ssr_id = p.get("ssr_id")
