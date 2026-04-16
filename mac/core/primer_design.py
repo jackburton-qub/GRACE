@@ -1,8 +1,6 @@
 """
 Primer Design Module (backend-safe)
 -----------------------------------
-Provides strict, recommended, and relaxed primer3 presets.
-Allows full override of any primer3 parameter.
 
 Specificity is NOT integrated here by design.
 Primers can be exported in BLAST-ready FASTA format.
@@ -177,6 +175,12 @@ def calc_3prime_dg(seq):
     return round(total, 2)
 
 
+def _worker_init():
+    """Suppress BrokenPipeError stderr noise from pool shutdown on Windows/Mac."""
+    import sys, os
+    sys.stderr = open(os.devnull, "w")
+
+
 def _design_one(args):
     """
     Worker function for multiprocessing — designs primers for a single SSR.
@@ -272,21 +276,32 @@ def design_primers_for_all_ssrs(
     n_workers = max(1, os.cpu_count() or 1)
     update_interval = max(1, total // 100)
 
-    # Build task args — extract template sequences here so workers are stateless
+    # Build task args — extract template sequences here so workers receive
+    # only small plain-data tuples. Passing the full genome dict or full SSR
+    # dicts across the spawn pipe causes BrokenPipeError on large datasets.
     task_args = []
     for ssr in ssr_list:
         contig   = ssr["contig"]
         start    = ssr["start"]
         end      = ssr["end"]
         full_seq = genome[contig]
-        # Convert back to 0-based for slicing (coordinates stored as 1-based)
         left_bound  = max(0, (start - 1) - flank)
         right_bound = min(len(full_seq), end + flank)
         template    = full_seq[left_bound:right_bound]
-        target_start = (start - 1) - left_bound  # 0-based offset into template
+        target_start = (start - 1) - left_bound
         target_len   = end - (start - 1)
+        # Only pass fields _design_one actually uses — keeps pickle payload small
+        ssr_slim = {
+            "ssr_id":          ssr["ssr_id"],
+            "contig":          ssr["contig"],
+            "start":           ssr["start"],
+            "end":             ssr["end"],
+            "motif":           ssr["motif"],
+            "canonical_motif": ssr.get("canonical_motif"),
+            "repeat_count":    ssr["repeat_count"],
+        }
         task_args.append((
-            ssr, template, left_bound,
+            ssr_slim, template, left_bound,
             target_start, target_len,
             product_size_range, opts, num_pairs,
         ))
@@ -308,9 +323,8 @@ def design_primers_for_all_ssrs(
 
     if n_workers > 1 and total >= 50:
         chunksize = max(10, min(500, total // (n_workers * 4)))
-        # Use spawn context — prevents deadlock on re-run in PyInstaller frozen apps
         ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=n_workers) as pool:
+        with ctx.Pool(processes=n_workers, initializer=_worker_init) as pool:
             _process_results(pool.imap(_design_one, task_args, chunksize=chunksize))
     else:
         _process_results(_design_one(a) for a in task_args)

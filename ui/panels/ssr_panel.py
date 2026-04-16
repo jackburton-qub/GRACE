@@ -19,6 +19,10 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
+# Maximum rows rendered in the SSR table. Beyond this the main thread
+# freezes for tens of seconds. Full data always lives in state and CSV.
+TABLE_DISPLAY_LIMIT = 10_000
+
 
 class SSRWorker(QThread):
     progress = pyqtSignal(int, int)
@@ -238,17 +242,40 @@ class SSRPanel(QWidget):
 
     def _on_done(self, ssrs, elapsed):
         self.state.clear_downstream_of_ssrs()
-        self.state.ssrs = ssrs; self.state.ssr_detection_time = elapsed; self.state.selected_ssrs = None
-        self.run_btn.setEnabled(True); self.progress_bar.setVisible(False)
+        self.state.ssrs = ssrs
+        self.state.ssr_detection_time = elapsed
+        self.state.selected_ssrs = None
+        self.run_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
         self._set_status(f"Found {len(ssrs):,} SSRs in {elapsed:.1f}s", SUCCESS)
         self.mw.set_status(f"SSR detection complete — {len(ssrs):,} SSRs found")
         self.mw.on_step_complete(1)
+        self._cleanup_worker()
         self._refresh()
 
     def _on_error(self, msg):
-        self.run_btn.setEnabled(True); self.progress_bar.setVisible(False)
+        self.run_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
         self._set_status(f"Error: {msg}", ERROR)
         self.mw.set_status("SSR detection failed")
+        self._cleanup_worker()
+
+    def _cleanup_worker(self):
+        """Disconnect signals and drop all large refs so Qt doesn't hold
+        the genome dict or SSR list alive after the thread finishes.
+        Without this the worker stays in memory until the next run, and
+        Qt can crash if it tries to emit into a partially-destroyed widget
+        after ~20 minutes of idle."""
+        if self._worker is not None:
+            try:
+                self._worker.progress.disconnect()
+                self._worker.finished.disconnect()
+                self._worker.error.disconnect()
+            except Exception:
+                pass
+            self._worker.genome = None   # release genome ref immediately
+            self._worker.params = None
+            self._worker = None
 
     def _set_status(self, msg, color):
         self.status_label.setText(msg)
@@ -259,7 +286,8 @@ class SSRPanel(QWidget):
             self.results_group.setVisible(False); return
         self.results_group.setVisible(True)
         import pandas as pd
-        ssrs = self.state.ssrs; df = pd.DataFrame(ssrs)
+        ssrs = self.state.ssrs
+        df = pd.DataFrame(ssrs)
         t = self.state.ssr_detection_time
         self.metrics_label.setText(
             f"{len(ssrs):,} SSRs   |   {df['motif'].nunique():,} unique motifs   |   "
@@ -269,20 +297,57 @@ class SSRPanel(QWidget):
         col_labels = {"ssr_id":"SSR ID","contig":"Contig","start":"Start (bp)","end":"End (bp)",
                       "motif":"Motif","canonical_motif":"Canonical motif","repeat_count":"Repeat count"}
         display_cols = [c for c in cols if c in df.columns]
+
+        # Cap display rows to avoid freezing the main thread on large datasets.
+        # Full data is always in state.ssrs and available for export/primer design.
+        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+        if truncated:
+            self.metrics_label.setText(
+                self.metrics_label.text() +
+                f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
+            )
+
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(df)); self.table.setColumnCount(len(display_cols))
-        self.table.setHorizontalHeaderLabels([col_labels.get(c,c) for c in display_cols])
+        self.table.setRowCount(len(display_df))
+        self.table.setColumnCount(len(display_cols))
+        self.table.setHorizontalHeaderLabels([col_labels.get(c, c) for c in display_cols])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        for row_idx in range(len(df)):
+
+        # Store ssr_id in each row's first column UserRole so selection
+        # works correctly even when the table is sorted or truncated.
+        ssr_id_col = display_cols.index("ssr_id") if "ssr_id" in display_cols else None
+        for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val = df.iat[row_idx, df.columns.get_loc(col)]
-                self.table.setItem(row_idx, col_idx, QTableWidgetItem(str(val)))
+                val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
+                item = QTableWidgetItem(str(val))
+                if col_idx == 0:
+                    # Store the actual ssr_id as item data for safe selection lookup
+                    item.setData(Qt.ItemDataRole.UserRole, int(display_df.iat[row_idx, display_df.columns.get_loc("ssr_id")]))
+                self.table.setItem(row_idx, col_idx, item)
         self.table.setSortingEnabled(True)
 
     def _on_selection_changed(self):
         rows = set(i.row() for i in self.table.selectedItems())
-        self.sel_count_label.setText(f"{len(rows):,} SSRs selected" if rows else "")
-        self.state.selected_ssrs = [self.state.ssrs[r] for r in sorted(rows)] if rows and self.state.has_ssrs else None
+        if not rows or not self.state.has_ssrs:
+            self.sel_count_label.setText("")
+            self.state.selected_ssrs = None
+            return
+        # Read ssr_id from UserRole data stored in col 0 — safe after sort/truncation
+        ssr_id_set = set()
+        for row in rows:
+            item = self.table.item(row, 0)
+            if item is not None:
+                uid = item.data(Qt.ItemDataRole.UserRole)
+                if uid is not None:
+                    ssr_id_set.add(uid)
+        if ssr_id_set:
+            ssr_by_id = {s["ssr_id"]: s for s in self.state.ssrs}
+            self.state.selected_ssrs = [ssr_by_id[i] for i in sorted(ssr_id_set) if i in ssr_by_id]
+        else:
+            self.state.selected_ssrs = None
+        count = len(self.state.selected_ssrs) if self.state.selected_ssrs else 0
+        self.sel_count_label.setText(f"{count:,} SSRs selected" if count else "")
 
     def _download_csv(self):
         if not self.state.has_ssrs: return

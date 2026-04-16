@@ -13,6 +13,7 @@ This is produced automatically by primers_to_blast_fasta() in primer_design.py.
 
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
@@ -26,7 +27,7 @@ from typing import List, Dict, Any, Optional
 class BlastParams:
     task: str = "blastn-short"
     word_size: int = 7
-    evalue: float = 1000.0
+    evalue: float = 0.001
     reward: int = 1
     penalty: int = -3
     gapopen: int = 5
@@ -150,26 +151,20 @@ PRESET_BLAST = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _run_cmd(cmd: List[str], cwd: Optional[str] = None, timeout: int = 10800) -> str:
-    """Run a shell command, raise RuntimeError on failure, return stdout.
-    timeout: seconds before giving up (default 3 hours). Set to None to disable.
-    """
-    import sys as _sys
+def _run_cmd(cmd: List[str], cwd: Optional[str] = None) -> str:
+    """Run a shell command, raise RuntimeError on failure, return stdout."""
     kwargs = {}
-    if _sys.platform == "win32":
+    if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout if timeout else None,
-            **kwargs,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **kwargs,
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\n"
@@ -287,10 +282,17 @@ def _pair_hits(
         n_left_hits     = len(left_locations)
         n_right_hits    = len(right_locations)
 
-        # Find all in-range amplicons
+        # Find all in-range amplicons.
+        # Guard against O(n²) explosion on highly repetitive genomes —
+        # if either primer has an unusually large number of hits, cap the
+        # search to avoid hanging. Pairs with >200 hits per side are
+        # almost certainly non-specific and will FAIL anyway.
+        MAX_HITS_PER_SIDE = 200
+        left_search  = left_hits[:MAX_HITS_PER_SIDE]
+        right_search = right_hits[:MAX_HITS_PER_SIDE]
         amplicons = []
-        for lh in left_hits:
-            for rh in right_hits:
+        for lh in left_search:
+            for rh in right_search:
                 if lh["sseqid"] != rh["sseqid"]:
                     continue
                 if lh["sstrand"] == rh["sstrand"]:
@@ -425,26 +427,6 @@ def check_specificity_blast(
 
         hits_raw = _parse_blast_tab(out_tab)
 
-        # Log hit counts to stderr for debugging
-        import sys
-        total_hits = len(hits_raw)
-        unique_queries = len({h["qseqid"] for h in hits_raw})
-        print(
-            f"[specificity] BLAST returned {total_hits} raw hits "
-            f"across {unique_queries} unique query sequences",
-            file=sys.stderr,
-        )
-        if total_hits > 0:
-            sample = hits_raw[0]
-            print(
-                f"[specificity] Sample hit — qseqid={sample['qseqid']!r}, "
-                f"sseqid={sample['sseqid']!r}, pident={sample['pident']}, "
-                f"length={sample['length']}, mismatch={sample['mismatch']}, "
-                f"sstrand={sample['sstrand']!r}",
-                file=sys.stderr,
-            )
-
-    # hits_raw is now in outer scope — safe after finally cleanup
     hits = hits_raw
     paired = _pair_hits(hits, specificity_params)
 
@@ -452,7 +434,7 @@ def check_specificity_blast(
     out: List[Dict[str, Any]] = []
     for p in primer_results:
         ssr_id = p.get("ssr_id")
-        spec = paired.get(ssr_id) or paired.get(int(ssr_id) if str(ssr_id).isdigit() else ssr_id)
+        spec = paired.get(ssr_id)
         if spec is None:
             merged = dict(p)
             merged["specificity_status"] = "UNKNOWN"

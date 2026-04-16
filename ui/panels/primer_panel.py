@@ -19,6 +19,10 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
+# Cap table display to prevent main-thread freeze on large primer sets.
+# Full data is always in state and available for export/BLAST.
+TABLE_DISPLAY_LIMIT = 10_000
+
 
 def _lbl(text, tip=None):
     w = QLabel(text)
@@ -311,6 +315,7 @@ class PrimerPanel(QWidget):
         if n_failed: msg += f" — {n_failed} SSRs failed"
         self._set_status(msg, SUCCESS)
         self.mw.set_status(msg); self.mw.on_step_complete(2)
+        self._cleanup_worker()
         self._refresh()
 
     def _on_error(self, msg):
@@ -318,6 +323,22 @@ class PrimerPanel(QWidget):
         self.progress_bar.setVisible(False)
         self._set_status(f"Error: {msg}", ERROR)
         self.mw.set_status("Primer design failed")
+        self._cleanup_worker()
+
+    def _cleanup_worker(self):
+        """Disconnect signals and release large refs from the worker thread.
+        Prevents Qt from holding the genome dict and SSR list alive after the
+        thread finishes, which causes idle crashes after ~20 minutes."""
+        if self._worker is not None:
+            try:
+                self._worker.progress.disconnect()
+                self._worker.finished.disconnect()
+                self._worker.error.disconnect()
+            except Exception:
+                pass
+            self._worker.genome   = None
+            self._worker.ssr_list = None
+            self._worker = None
 
     def _set_status(self, msg, color):
         self.run_status.setText(msg)
@@ -395,12 +416,22 @@ class PrimerPanel(QWidget):
             "left_3end_dg":"Forward 3' stability","right_3end_dg":"Reverse 3' stability",
         }
         display_cols = [c for c in COLS if c in df.columns]
+
+        # Cap display rows to avoid freezing the main thread on large datasets.
+        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+        if truncated:
+            self.metrics_label.setText(
+                self.metrics_label.text() +
+                f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
+            )
+
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(df)); self.table.setColumnCount(len(display_cols))
+        self.table.setRowCount(len(display_df)); self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels([COLS[c] for c in display_cols])
-        for row_idx in range(len(df)):
+        for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val = df.iat[row_idx, df.columns.get_loc(col)]
+                val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
                 self.table.setItem(row_idx, col_idx, QTableWidgetItem(text))
         self.table.resizeColumnsToContents()

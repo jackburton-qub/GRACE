@@ -282,10 +282,17 @@ def _pair_hits(
         n_left_hits     = len(left_locations)
         n_right_hits    = len(right_locations)
 
-        # Find all in-range amplicons
+        # Find all in-range amplicons.
+        # Guard against O(n²) explosion on highly repetitive genomes —
+        # if either primer has an unusually large number of hits, cap the
+        # search to avoid hanging. Pairs with >200 hits per side are
+        # almost certainly non-specific and will FAIL anyway.
+        MAX_HITS_PER_SIDE = 200
+        left_search  = left_hits[:MAX_HITS_PER_SIDE]
+        right_search = right_hits[:MAX_HITS_PER_SIDE]
         amplicons = []
-        for lh in left_hits:
-            for rh in right_hits:
+        for lh in left_search:
+            for rh in right_search:
                 if lh["sseqid"] != rh["sseqid"]:
                     continue
                 if lh["sstrand"] == rh["sstrand"]:
@@ -420,26 +427,6 @@ def check_specificity_blast(
 
         hits_raw = _parse_blast_tab(out_tab)
 
-        # Log hit counts to stderr for debugging
-        import sys
-        total_hits = len(hits_raw)
-        unique_queries = len({h["qseqid"] for h in hits_raw})
-        print(
-            f"[specificity] BLAST returned {total_hits} raw hits "
-            f"across {unique_queries} unique query sequences",
-            file=sys.stderr,
-        )
-        if total_hits > 0:
-            sample = hits_raw[0]
-            print(
-                f"[specificity] Sample hit — qseqid={sample['qseqid']!r}, "
-                f"sseqid={sample['sseqid']!r}, pident={sample['pident']}, "
-                f"length={sample['length']}, mismatch={sample['mismatch']}, "
-                f"sstrand={sample['sstrand']!r}",
-                file=sys.stderr,
-            )
-
-    # hits_raw is now in outer scope — safe after finally cleanup
     hits = hits_raw
     paired = _pair_hits(hits, specificity_params)
 
