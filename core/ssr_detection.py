@@ -43,6 +43,22 @@ def reverse_complement(seq: str) -> str:
     return seq.translate(comp)[::-1]
 
 
+def is_compound_motif(motif: str) -> bool:
+    """
+    Return True if motif is just a shorter unit repeated.
+    e.g. CTCT -> True (it's CT*2), ATAT -> True (AT*2),
+         CTAG -> False (no shorter period divides it evenly).
+    Checks all divisors of len(motif) smaller than len(motif).
+    """
+    n = len(motif)
+    for period in range(1, n):
+        if n % period == 0:
+            unit = motif[:period]
+            if unit * (n // period) == motif:
+                return True
+    return False
+
+
 @lru_cache(maxsize=131072)
 def canonical_motif(motif: str, level: int = 4) -> str:
     """Compute the canonical form of a motif (cached)."""
@@ -125,6 +141,11 @@ def _scan_contig(args):
             if exclude_homopolymers and len(set(motif_str)) == 1:
                 continue
 
+            # Skip compound motifs — e.g. CTCT is just CT repeated, not a
+            # true tetranucleotide. is_compound_motif catches all such cases.
+            if is_compound_motif(motif_str):
+                continue
+
             full_len     = m.end() - m.start()
             repeat_count = full_len // k
             canon        = canonical_tbl.get(motif_str) or canonical_motif(motif_str, std_level)
@@ -145,6 +166,9 @@ def _scan_contig(args):
                 motif_str = m.group(1).upper()
 
                 if exclude_homopolymers and len(set(motif_str)) == 1:
+                    continue
+
+                if is_compound_motif(motif_str):
                     continue
 
                 full_len     = m.end() - m.start()

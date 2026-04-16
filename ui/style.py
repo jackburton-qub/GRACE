@@ -30,10 +30,21 @@ BORDER_ACTIVE = "#2ea043"    # focused / active border
 # ── Fonts ─────────────────────────────────────────────────
 FONT_UI   = "IBM Plex Sans"
 FONT_MONO = "IBM Plex Mono"
-FONT_SIZE_NORMAL = 9
-FONT_SIZE_SMALL  = 8
-FONT_SIZE_LARGE  = 11
-FONT_SIZE_TITLE  = 14
+
+# Font size presets — base size drives all other sizes proportionally
+FONT_PRESETS = {
+    "Small":  {"normal": 8,  "small": 7,  "large": 10, "title": 13},
+    "Medium": {"normal": 9,  "small": 8,  "large": 11, "title": 14},
+    "Large":  {"normal": 11, "small": 10, "large": 13, "title": 16},
+}
+FONT_SIZE_PRESET_DEFAULT = "Medium"
+
+# Resolved at import time using the default preset — used by widgets that
+# import these constants directly (sidebar font, etc.)
+FONT_SIZE_NORMAL = FONT_PRESETS[FONT_SIZE_PRESET_DEFAULT]["normal"]
+FONT_SIZE_SMALL  = FONT_PRESETS[FONT_SIZE_PRESET_DEFAULT]["small"]
+FONT_SIZE_LARGE  = FONT_PRESETS[FONT_SIZE_PRESET_DEFAULT]["large"]
+FONT_SIZE_TITLE  = FONT_PRESETS[FONT_SIZE_PRESET_DEFAULT]["title"]
 
 # ── Dimensions ───────────────────────────────────────────
 SIDEBAR_WIDTH  = 210
@@ -44,14 +55,25 @@ CARD_RADIUS    = 6
 BUTTON_RADIUS  = 6
 BUTTON_HEIGHT  = 32
 
-# ── Stylesheet ────────────────────────────────────────────
-STYLESHEET = f"""
+# ── Stylesheet builder ────────────────────────────────────
+def build_stylesheet(preset: str = FONT_SIZE_PRESET_DEFAULT) -> str:
+    """
+    Build and return the full Qt stylesheet for the given font size preset.
+    preset must be one of: "Small", "Medium", "Large"
+    """
+    sizes = FONT_PRESETS.get(preset, FONT_PRESETS[FONT_SIZE_PRESET_DEFAULT])
+    _n = sizes["normal"]   # general UI text
+    _s = sizes["small"]    # tables, headers, tabs, status bar
+    _l = sizes["large"]    # section headings
+    _t = sizes["title"]    # not used in stylesheet directly but available
+
+    return f"""
 /* ── Global ── */
 QMainWindow, QWidget {{
     background-color: {BG_DARK};
     color: {TEXT_PRIMARY};
     font-family: "{FONT_UI}", "Segoe UI", system-ui, sans-serif;
-    font-size: {FONT_SIZE_NORMAL}pt;
+    font-size: {_n}pt;
 }}
 
 /* ── Sidebar ── */
@@ -67,7 +89,7 @@ QListWidget#sidebar::item {{
     border-left: 3px solid transparent;
     color: {TEXT_SECONDARY};
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_NORMAL}pt;
+    font-size: {_n}pt;
 }}
 QListWidget#sidebar::item:selected {{
     background-color: {BG_LIGHT};
@@ -89,7 +111,7 @@ QPushButton {{
     padding: 5px 16px;
     min-height: {BUTTON_HEIGHT}px;
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_NORMAL}pt;
+    font-size: {_n}pt;
     font-weight: 500;
 }}
 QPushButton:hover {{
@@ -219,7 +241,7 @@ QGroupBox {{
     margin-top: 14px;
     padding: 12px 16px 16px 16px;
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     font-weight: 600;
     color: {TEXT_SECONDARY};
 }}
@@ -230,7 +252,7 @@ QGroupBox::title {{
     padding: 0 6px;
     color: {TEXT_SECONDARY};
     background-color: {BG_DARK};
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     font-weight: 600;
     letter-spacing: 0.5px;
     text-transform: uppercase;
@@ -245,7 +267,7 @@ QTableWidget, QTableView {{
     gridline-color: {BORDER};
     color: {TEXT_PRIMARY};
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     selection-background-color: #1f3d2a;
     selection-color: {TEXT_PRIMARY};
 }}
@@ -269,7 +291,7 @@ QHeaderView::section {{
     padding: 6px 10px;
     font-family: "{FONT_UI}", sans-serif;
     font-weight: 600;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     letter-spacing: 0.3px;
 }}
 QHeaderView::section:first {{
@@ -341,7 +363,7 @@ QTabBar::tab {{
     border-top-right-radius: {BUTTON_RADIUS}px;
     margin-right: 2px;
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     font-weight: 500;
 }}
 QTabBar::tab:selected {{
@@ -359,7 +381,7 @@ QCheckBox {{
     color: {TEXT_PRIMARY};
     spacing: 8px;
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_NORMAL}pt;
+    font-size: {_n}pt;
 }}
 QCheckBox::indicator {{
     width: 15px;
@@ -383,7 +405,7 @@ QStatusBar {{
     border-top: 1px solid {BORDER};
     color: {TEXT_SECONDARY};
     font-family: "{FONT_MONO}", monospace;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
     padding: 3px 10px;
 }}
 
@@ -395,7 +417,7 @@ QToolTip {{
     padding: 6px 10px;
     border-radius: {BUTTON_RADIUS}px;
     font-family: "{FONT_UI}", sans-serif;
-    font-size: {FONT_SIZE_SMALL}pt;
+    font-size: {_s}pt;
 }}
 
 /* ── Scroll area ── */
@@ -430,3 +452,7 @@ QSplitter::handle:hover {{
     background: {ACCENT_DIM};
 }}
 """
+
+
+# Default stylesheet at import time — used by main.py initial setStyleSheet call
+STYLESHEET = build_stylesheet(FONT_SIZE_PRESET_DEFAULT)

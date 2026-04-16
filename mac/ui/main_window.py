@@ -8,15 +8,18 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QStackedWidget,
     QLabel, QStatusBar, QSizePolicy, QFrame,
+    QButtonGroup, QRadioButton,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
 
 from ui.style import (
-    STYLESHEET, SIDEBAR_WIDTH, WINDOW_MIN_W, WINDOW_MIN_H,
+    STYLESHEET, build_stylesheet,
+    SIDEBAR_WIDTH, WINDOW_MIN_W, WINDOW_MIN_H,
     ACCENT, SUCCESS, MUTED, TEXT_SECONDARY,
     BG_MID, BG_LIGHT, BG_DARK, BORDER, TEXT_PRIMARY,
     FONT_UI, FONT_MONO, FONT_SIZE_NORMAL, FONT_SIZE_SMALL,
+    FONT_PRESETS, FONT_SIZE_PRESET_DEFAULT,
 )
 from ui.panels.home_panel        import HomePanel
 from ui.panels.ssr_panel         import SSRPanel
@@ -98,6 +101,62 @@ class MainWindow(QMainWindow):
             item.setFont(font)
             self.sidebar.addItem(item)
 
+        # Font size selector
+        font_size_widget = QWidget()
+        font_size_widget.setStyleSheet(
+            f"background: transparent; border-top: 1px solid {BORDER}; padding: 8px 0 4px 0;"
+        )
+        font_size_layout = QVBoxLayout(font_size_widget)
+        font_size_layout.setContentsMargins(16, 8, 16, 4)
+        font_size_layout.setSpacing(6)
+
+        font_size_label = QLabel("TEXT SIZE")
+        font_size_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 7pt; font-weight: 600; "
+            f"letter-spacing: 0.5px; border: none;"
+        )
+        font_size_layout.addWidget(font_size_label)
+
+        btn_row = QWidget()
+        btn_row.setStyleSheet("background: transparent; border: none;")
+        btn_row_layout = QHBoxLayout(btn_row)
+        btn_row_layout.setContentsMargins(0, 0, 0, 0)
+        btn_row_layout.setSpacing(4)
+
+        self._font_btn_group = QButtonGroup(self)
+        self._font_preset = FONT_SIZE_PRESET_DEFAULT
+
+        for preset in ("Small", "Medium", "Large"):
+            btn = QRadioButton(preset)
+            btn.setStyleSheet(f"""
+                QRadioButton {{
+                    color: {TEXT_SECONDARY};
+                    font-size: 8pt;
+                    spacing: 4px;
+                    border: none;
+                    background: transparent;
+                }}
+                QRadioButton:checked {{
+                    color: {ACCENT};
+                }}
+                QRadioButton::indicator {{
+                    width: 10px; height: 10px;
+                    border: 1px solid {MUTED};
+                    border-radius: 5px;
+                    background: transparent;
+                }}
+                QRadioButton::indicator:checked {{
+                    background: {ACCENT};
+                    border-color: {ACCENT};
+                }}
+            """)
+            if preset == FONT_SIZE_PRESET_DEFAULT:
+                btn.setChecked(True)
+            self._font_btn_group.addButton(btn)
+            btn_row_layout.addWidget(btn)
+
+        font_size_layout.addWidget(btn_row)
+
         # Version label at bottom of sidebar
         version_label = QLabel("v1.0.0")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -106,6 +165,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(header)
         sidebar_layout.addWidget(self.sidebar)
         sidebar_layout.addStretch()
+        sidebar_layout.addWidget(font_size_widget)
         sidebar_layout.addWidget(version_label)
 
         # ── Main panel stack ─────────────────────────────
@@ -137,6 +197,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.sidebar.currentRowChanged.connect(self._on_tab_changed)
         self.sidebar.setCurrentRow(0)
+        self._font_btn_group.buttonClicked.connect(self._on_font_size_changed)
 
     def _on_tab_changed(self, index):
         self.stack.setCurrentIndex(index)
@@ -144,6 +205,14 @@ class MainWindow(QMainWindow):
         panel = self.stack.currentWidget()
         if hasattr(panel, "on_show"):
             panel.on_show()
+
+    def _on_font_size_changed(self, btn):
+        """Rebuild and reapply the stylesheet when the user picks a font size."""
+        preset = btn.text()
+        if preset == self._font_preset:
+            return
+        self._font_preset = preset
+        self.setStyleSheet(build_stylesheet(preset))
 
     # ---------------------------------------------------------
     # PUBLIC API — called by panels to update UI

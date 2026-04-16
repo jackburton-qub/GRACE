@@ -43,6 +43,22 @@ def reverse_complement(seq: str) -> str:
     return seq.translate(comp)[::-1]
 
 
+def is_compound_motif(motif: str) -> bool:
+    """
+    Return True if motif is just a shorter unit repeated.
+    e.g. CTCT -> True (it's CT*2), ATAT -> True (AT*2),
+         CTAG -> False (no shorter period divides it evenly).
+    Checks all divisors of len(motif) smaller than len(motif).
+    """
+    n = len(motif)
+    for period in range(1, n):
+        if n % period == 0:
+            unit = motif[:period]
+            if unit * (n // period) == motif:
+                return True
+    return False
+
+
 @lru_cache(maxsize=131072)
 def canonical_motif(motif: str, level: int = 4) -> str:
     """Compute the canonical form of a motif (cached)."""
@@ -88,6 +104,17 @@ def _build_pattern(k: int, min_rep: int) -> re.Pattern:
 # SINGLE-CONTIG WORKER  (must be top-level for pickling)
 # ---------------------------------------------------------
 
+def _worker_init():
+    """
+    Redirect worker stderr to devnull on startup.
+    Suppresses BrokenPipeError tracebacks printed by dying workers when the
+    pool closes on Windows/Mac — cosmetic noise, not a real error.
+    """
+    import sys
+    import os
+    sys.stderr = open(os.devnull, "w")
+
+
 def _scan_contig(args):
     """
     Scan a single contig for SSRs.
@@ -125,6 +152,9 @@ def _scan_contig(args):
             if exclude_homopolymers and len(set(motif_str)) == 1:
                 continue
 
+            if is_compound_motif(motif_str):
+                continue
+
             full_len     = m.end() - m.start()
             repeat_count = full_len // k
             canon        = canonical_tbl.get(motif_str) or canonical_motif(motif_str, std_level)
@@ -145,6 +175,9 @@ def _scan_contig(args):
                 motif_str = m.group(1).upper()
 
                 if exclude_homopolymers and len(set(motif_str)) == 1:
+                    continue
+
+                if is_compound_motif(motif_str):
                     continue
 
                 full_len     = m.end() - m.start()
@@ -259,7 +292,7 @@ def find_ssrs(
 
         # Use spawn context — prevents deadlock on re-run in PyInstaller frozen apps
         ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=n_workers) as pool:
+        with ctx.Pool(processes=n_workers, initializer=_worker_init) as pool:
             completed = 0
             for contig_results in pool.imap(
                 _scan_contig, task_args, chunksize=chunksize
