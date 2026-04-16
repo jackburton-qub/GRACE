@@ -26,13 +26,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_dat
 # Collect packages PyInstaller cannot fully analyse automatically
 # ---------------------------------------------------------------------------
 
-# PyQt6 — collect all Qt plugins and binaries
 qt_datas, qt_binaries, qt_hiddenimports = collect_all("PyQt6")
-
-# primer3 — C extension with shared library
 primer3_datas, primer3_binaries, primer3_hiddenimports = collect_all("primer3")
-
-# pandas / numpy
 pandas_hiddenimports = collect_submodules("pandas")
 numpy_hiddenimports  = collect_submodules("numpy")
 
@@ -46,7 +41,7 @@ app_datas = [
     ("ui",               "ui"),
     ("core",             "core"),
     ("assets",           "assets"),
-    ("blast/windows",    "blast/windows"),   # bundled BLAST+ binaries for Windows
+    ("blast/windows",    "blast/windows"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -59,7 +54,6 @@ all_hidden = (
     + pandas_hiddenimports
     + numpy_hiddenimports
     + [
-        # multiprocessing — needed for primer design and SSR detection
         "multiprocessing",
         "multiprocessing.pool",
         "multiprocessing.managers",
@@ -69,7 +63,6 @@ all_hidden = (
         "multiprocessing.popen_forkserver",
         "multiprocessing.popen_spawn_posix",
         "multiprocessing.popen_spawn_win32",
-        # stdlib
         "subprocess",
         "tempfile",
         "socket",
@@ -89,16 +82,8 @@ all_hidden = (
 # Combined datas and binaries
 # ---------------------------------------------------------------------------
 
-all_datas = (
-    app_datas
-    + qt_datas
-    + primer3_datas
-)
-
-all_binaries = (
-    qt_binaries
-    + primer3_binaries
-)
+all_datas    = app_datas + qt_datas + primer3_datas
+all_binaries = qt_binaries + primer3_binaries
 
 # ---------------------------------------------------------------------------
 # ANALYSIS
@@ -142,10 +127,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,          # UPX disabled — corrupts .pyd and .exe files
+    upx=False,
     console=False,
     windowed=True,
-    icon="grace_icon.ico",
+    icon=None,
 )
 
 coll = COLLECT(
@@ -154,16 +139,15 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,          # UPX disabled — corrupts .pyd and .exe files
+    upx=False,
     upx_exclude=[],
-    name="GRACE",       # → dist/GRACE/
+    name="GRACE",
 )
 
-# Mac .app bundle (ignored on Windows)
 app = BUNDLE(
     coll,
     name="GRACE.app",
-    icon="grace_icon.icns",
+    icon=None,
     bundle_identifier="com.grace.app",
     info_plist={
         "NSPrincipalClass":           "NSApplication",

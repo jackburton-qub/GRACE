@@ -25,10 +25,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Download BLAST+ binaries (Windows)
+      - name: Download and extract BLAST+ binaries (Windows)
         shell: powershell
         run: |
-          $url = "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0%2B-win64.tar.gz"
+          $url = "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0%2B-x64-win64.tar.gz"
           Invoke-WebRequest -Uri $url -OutFile blast.tar.gz
           tar -xzf blast.tar.gz
           New-Item -ItemType Directory -Force -Path blast\windows
@@ -36,8 +36,12 @@ jobs:
           Copy-Item "ncbi-blast-2.17.0+\bin\blastn.exe.manifest"      blast\windows\
           Copy-Item "ncbi-blast-2.17.0+\bin\makeblastdb.exe"          blast\windows\
           Copy-Item "ncbi-blast-2.17.0+\bin\makeblastdb.exe.manifest" blast\windows\
-          Copy-Item "ncbi-blast-2.17.0+\bin\ncbi-vdb-md.dll"          blast\windows\
-          Copy-Item "ncbi-blast-2.17.0+\bin\nghttp2.dll"              blast\windows\
+          if (Test-Path "ncbi-blast-2.17.0+\bin\ncbi-vdb-md.dll") {
+            Copy-Item "ncbi-blast-2.17.0+\bin\ncbi-vdb-md.dll" blast\windows\
+          }
+          if (Test-Path "ncbi-blast-2.17.0+\bin\nghttp2.dll") {
+            Copy-Item "ncbi-blast-2.17.0+\bin\nghttp2.dll" blast\windows\
+          }
 
       - name: Build executable
         run: pyinstaller GRACE.spec

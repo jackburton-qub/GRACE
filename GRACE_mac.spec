@@ -38,7 +38,7 @@ app_datas = [
     ("ui",           "ui"),
     ("core",         "core"),
     ("assets",       "assets"),
-    ("blast/mac",    "blast/mac"),   # bundled BLAST+ binaries for macOS
+    ("blast/mac",    "blast/mac"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -124,10 +124,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,           # UPX disabled — corrupts binaries on Mac too
+    upx=False,
     console=False,
     windowed=True,
-    icon="grace_icon.icns",
+    icon=None,
 )
 
 coll = COLLECT(
@@ -136,16 +136,15 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,           # UPX disabled
+    upx=False,
     upx_exclude=[],
     name="GRACE",
 )
 
-# Mac .app bundle
 app = BUNDLE(
     coll,
     name="GRACE.app",
-    icon="grace_icon.icns",
+    icon=None,
     bundle_identifier="com.grace.app",
     info_plist={
         "NSPrincipalClass":               "NSApplication",
