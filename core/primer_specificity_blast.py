@@ -282,8 +282,7 @@ def _pair_hits(
         n_left_hits     = len(left_locations)
         n_right_hits    = len(right_locations)
 
-        # Find all in-range amplicons.
-        # Guard against O(n²) explosion on repetitive genomes — cap hits per side.
+        # Guard against O(n²) explosion on repetitive genomes
         MAX_HITS_PER_SIDE = 200
         left_search  = left_hits[:MAX_HITS_PER_SIDE]
         right_search = right_hits[:MAX_HITS_PER_SIDE]
@@ -382,10 +381,6 @@ def check_specificity_blast(
     if specificity_params is None:
         specificity_params = SpecificityParams()
 
-    # On Windows, executables need the .exe suffix when given as an explicit
-    # path. When relying on PATH (no blast_bin_dir), omit the suffix so the
-    # shell can resolve it normally on all platforms.
-    # os.path.join handles spaces correctly as long as we never shell=True.
     exe_suffix = ".exe" if sys.platform == "win32" else ""
 
     if blast_bin_dir:
@@ -403,10 +398,17 @@ def check_specificity_blast(
         # Normalise genome path — strip accidental whitespace
         genome_fasta = genome_fasta.strip()
 
-        # Build BLAST database
+        # Copy genome into the temp directory so BLAST never sees a path
+        # with spaces. Some BLAST+ versions on Windows misparse spaced paths
+        # even when passed as a list argument, so this is the safest fix.
+        genome_local = os.path.join(tmpdir, "genome.fasta")
+        import shutil as _shutil
+        _shutil.copy2(genome_fasta, genome_local)
+
+        # Build BLAST database against the local copy
         _run_cmd([
             makeblastdb,
-            "-in", genome_fasta,
+            "-in", genome_local,
             "-dbtype", "nucl",
             "-out", db_prefix,
         ])
