@@ -31,7 +31,9 @@ class AppState:
     # ── Specificity ───────────────────────────────────────
     specificity_results: Optional[list] = None
     blast_raw_rows:      Optional[list] = None
-    blast_bin_dir:       Optional[str]  = None  # persists across panels
+    # blast_bin_dir is no longer stored here — BLAST binaries are bundled
+    # with the app and resolved automatically by get_blast_bin_dir() in
+    # core/primer_specificity_blast.py.
 
     # ── Run version stamps ────────────────────────────────
     # Incremented each time a step completes — downstream panels

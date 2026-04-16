@@ -1,13 +1,14 @@
 """
 specificity_panel.py — Specificity Check
 Single scroll area. Runs BLAST. Stores results. Shows pass count only.
+BLAST binaries are now bundled with the app — no path input needed.
 """
 import os, sys, copy, shutil
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QGridLayout, QSpinBox, QDoubleSpinBox, QComboBox,
-    QProgressBar, QScrollArea, QLineEdit,
+    QProgressBar, QScrollArea,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -29,31 +30,26 @@ class BLASTWorker(QThread):
     finished = pyqtSignal(list)
     error    = pyqtSignal(str)
 
-    def __init__(self, genome_path, primers, blast_params, specificity_params, blast_bin_dir):
+    def __init__(self, genome_path, primers, blast_params, specificity_params):
         super().__init__()
         self.genome_path        = genome_path
         self.primers            = primers
         self.blast_params       = blast_params
         self.specificity_params = specificity_params
-        self.blast_bin_dir      = blast_bin_dir
 
     def run(self):
         try:
-            _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            if _root not in sys.path:
-                sys.path.insert(0, _root)
             from core.primer_specificity_blast import check_specificity_blast
             results = check_specificity_blast(
                 genome_fasta=self.genome_path,
                 primer_results=self.primers,
                 blast_params=self.blast_params,
                 specificity_params=self.specificity_params,
-                blast_bin_dir=self.blast_bin_dir,
+                # blast_bin_dir omitted — resolved automatically from bundled blast/
             )
             self.finished.emit(results)
         except Exception as e:
             self.error.emit(str(e))
-
 
 
 def _flatten_blast_hits(spec_results):
@@ -78,6 +74,7 @@ def _flatten_blast_hits(spec_results):
     cols = ["ssr_id","primer_side","qseqid","sseqid","pident","length",
             "mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore","sstrand"]
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
 
 class SpecificityPanel(QWidget):
     def __init__(self, state, main_window):
@@ -111,6 +108,14 @@ class SpecificityPanel(QWidget):
         L.addWidget(title)
         L.addWidget(sub)
 
+        # BLAST status (bundled — read only, no path input)
+        blast_group = QGroupBox("BLAST+ Status")
+        bg = QVBoxLayout(blast_group)
+        self.blast_detected_label = QLabel("")
+        self.blast_detected_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        bg.addWidget(self.blast_detected_label)
+        L.addWidget(blast_group)
+
         # Primer queue
         queue_group = QGroupBox("Primer Queue")
         qg = QVBoxLayout(queue_group)
@@ -118,22 +123,6 @@ class SpecificityPanel(QWidget):
         self.queue_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
         qg.addWidget(self.queue_label)
         L.addWidget(queue_group)
-
-        # BLAST path
-        blast_group = QGroupBox("BLAST+ Location")
-        bg = QVBoxLayout(blast_group)
-        self.blast_detected_label = QLabel("")
-        self.blast_detected_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        bg.addWidget(self.blast_detected_label)
-        path_row = QHBoxLayout()
-        path_row.addWidget(_lbl("BLAST+ bin directory"))
-        self.blast_path_input = QLineEdit()
-        self.blast_path_input.setPlaceholderText(r"C:\Program Files\NCBI\blast-2.16.0+\bin  (leave blank if on PATH)")
-        self.blast_path_input.setToolTip("Leave blank if blastn is on your system PATH.\nOn Windows, paste the path to your BLAST+ bin folder.")
-        self.blast_path_input.textChanged.connect(self._on_path_changed)
-        path_row.addWidget(self.blast_path_input)
-        bg.addLayout(path_row)
-        L.addWidget(blast_group)
 
         # Settings
         settings_group = QGroupBox("Specificity Settings")
@@ -230,13 +219,6 @@ class SpecificityPanel(QWidget):
         self._refresh()
 
     # ---------------------------------------------------------
-    # PATH
-    # ---------------------------------------------------------
-    def _on_path_changed(self, text):
-        if text.strip():
-            self.state.blast_bin_dir = text.strip()
-
-    # ---------------------------------------------------------
     # RUN
     # ---------------------------------------------------------
     def _run(self):
@@ -247,18 +229,11 @@ class SpecificityPanel(QWidget):
         if not self.state.genome_path:
             self._set_status("Genome file path not available — reload genome on Home page", WARNING); return
 
-        blast_bin_dir = self.state.blast_bin_dir or None
-        if not blast_bin_dir and not shutil.which("blastn"):
-            self._set_status("BLAST+ not found. Install BLAST+ and enter the bin directory above.", ERROR)
-            return
-
         # Snapshot primers — local variable, immune to any state changes during run
         _primers = list(self.state.blast_primers)
         if not _primers:
             self._set_status("No primers to BLAST", WARNING); return
 
-        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        if _root not in sys.path: sys.path.insert(0, _root)
         from core.primer_specificity_blast import PRESET_SPECIFICITY, PRESET_BLAST
 
         blast_params = copy.copy(PRESET_BLAST["Single-locus"])
@@ -284,7 +259,7 @@ class SpecificityPanel(QWidget):
         self.mw.set_status("Running BLAST...")
 
         self._worker = BLASTWorker(
-            self.state.genome_path, _primers, blast_params, sp, blast_bin_dir
+            self.state.genome_path, _primers, blast_params, sp
         )
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
@@ -314,7 +289,7 @@ class SpecificityPanel(QWidget):
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         if "not found" in msg.lower() or "no such file" in msg.lower():
-            self._set_status("BLAST+ executables not found. Check the bin directory path above.", ERROR)
+            self._set_status("BLAST+ executables not found — please report this issue.", ERROR)
         else:
             self._set_status(f"BLAST failed: {msg}", ERROR)
         self.mw.set_status("Specificity check failed")
@@ -352,18 +327,22 @@ class SpecificityPanel(QWidget):
     # REFRESH
     # ---------------------------------------------------------
     def _refresh(self):
-        # Restore persisted BLAST path
-        if self.state.blast_bin_dir:
-            self.blast_path_input.setText(self.state.blast_bin_dir)
+        # Show bundled BLAST status
+        from core.primer_specificity_blast import get_blast_bin_dir
+        blast_dir = get_blast_bin_dir()
+        exe_suffix = ".exe" if sys.platform == "win32" else ""
+        blastn_path = os.path.join(blast_dir, f"blastn{exe_suffix}") if blast_dir else ""
 
-        # Auto-detect BLAST
-        blastn = shutil.which("blastn")
-        if blastn:
-            self.blast_detected_label.setText(f"BLAST+ detected on PATH — {blastn}")
+        if blast_dir and os.path.isfile(blastn_path):
+            self.blast_detected_label.setText(f"✓ Bundled BLAST+ ready — {blastn_path}")
+            self.blast_detected_label.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
+        elif shutil.which("blastn"):
+            found = shutil.which("blastn")
+            self.blast_detected_label.setText(f"✓ BLAST+ detected on system PATH — {found}")
             self.blast_detected_label.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
         else:
-            self.blast_detected_label.setText("BLAST+ not detected on PATH — enter bin directory below or install from ncbi.nlm.nih.gov/blast")
-            self.blast_detected_label.setStyleSheet(f"color: {WARNING}; font-size: {FONT_SIZE_SMALL}pt;")
+            self.blast_detected_label.setText("✗ BLAST+ not found — please report this issue")
+            self.blast_detected_label.setStyleSheet(f"color: {ERROR}; font-size: {FONT_SIZE_SMALL}pt;")
 
         # Queue info
         if self.state.has_primers:

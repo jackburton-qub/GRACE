@@ -20,6 +20,34 @@ from typing import List, Dict, Any, Optional
 
 
 # ---------------------------------------------------------------------------
+# Bundled BLAST binary resolution
+# ---------------------------------------------------------------------------
+
+def get_blast_bin_dir() -> str:
+    """
+    Return the directory containing bundled BLAST binaries.
+
+    Priority order:
+      1. PyInstaller frozen bundle  → <_MEIPASS>/blast/
+      2. Development (source)       → <project_root>/blast/
+      3. System PATH fallback       → empty string (let OS resolve)
+    """
+    if getattr(sys, "frozen", False):
+        # Running as a PyInstaller bundle
+        base = sys._MEIPASS
+    else:
+        # Running from source — go up to project root
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    bundled = os.path.join(base, "blast")
+    if os.path.isdir(bundled):
+        return bundled
+
+    # Fall back to system PATH
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Parameter dataclasses
 # ---------------------------------------------------------------------------
 
@@ -370,7 +398,8 @@ def check_specificity_blast(
         primer_results: list of dicts with keys: ssr_id, left_primer, right_primer
         blast_params: BlastParams dataclass (defaults to BlastParams())
         specificity_params: SpecificityParams dataclass (defaults to SpecificityParams())
-        blast_bin_dir: optional path to BLAST binaries directory
+        blast_bin_dir: optional override path to BLAST binaries directory.
+                       If None, automatically resolves bundled or system BLAST.
 
     Returns:
         List of primer result dicts with added keys:
@@ -383,12 +412,15 @@ def check_specificity_blast(
 
     exe_suffix = ".exe" if sys.platform == "win32" else ""
 
-    if blast_bin_dir:
-        blastn      = os.path.join(blast_bin_dir.strip(), f"blastn{exe_suffix}")
-        makeblastdb = os.path.join(blast_bin_dir.strip(), f"makeblastdb{exe_suffix}")
+    # Resolve BLAST binary directory — prefer explicit override, then bundled, then PATH
+    resolved_bin_dir = blast_bin_dir or get_blast_bin_dir()
+
+    if resolved_bin_dir:
+        blastn      = os.path.join(resolved_bin_dir.strip(), f"blastn{exe_suffix}")
+        makeblastdb = os.path.join(resolved_bin_dir.strip(), f"makeblastdb{exe_suffix}")
     else:
-        blastn      = "blastn"
-        makeblastdb = "makeblastdb"
+        blastn      = f"blastn{exe_suffix}"
+        makeblastdb = f"makeblastdb{exe_suffix}"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_prefix  = os.path.join(tmpdir, "genome_db")

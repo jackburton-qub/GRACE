@@ -1,14 +1,19 @@
-# GRACE.spec
-# ----------
-# PyInstaller build spec for GRACE (PyQt6 version) — single executable.
+# GRACE_mac.spec
+# --------------
+# PyInstaller build spec for GRACE (PyQt6 version) — macOS build.
 #
-# Produces a single folder in dist/GRACE/ containing GRACE.app (Mac)
+# Produces dist/GRACE/GRACE.app
 #
 # Build with:
 #   python3.12 build.py
 #
 # Or directly:
-#   pyinstaller GRACE.spec
+#   pyinstaller GRACE_mac.spec
+#
+# Before building, ensure BLAST+ binaries are in blast/mac/:
+#   blast/mac/blastn
+#   blast/mac/makeblastdb
+# (chmod +x both files on Mac before building)
 
 import sys
 import os
@@ -33,6 +38,7 @@ app_datas = [
     ("ui",           "ui"),
     ("core",         "core"),
     ("assets",       "assets"),
+    ("blast/mac",    "blast/mac"),   # bundled BLAST+ binaries for macOS
 ]
 
 # ---------------------------------------------------------------------------
@@ -118,7 +124,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,           # UPX disabled — corrupts binaries on Mac too
     console=False,
     windowed=True,
     icon="grace_icon.icns",
@@ -130,7 +136,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,           # UPX disabled
     upx_exclude=[],
     name="GRACE",
 )
@@ -142,11 +148,11 @@ app = BUNDLE(
     icon="grace_icon.icns",
     bundle_identifier="com.grace.app",
     info_plist={
-        "NSPrincipalClass":           "NSApplication",
-        "NSHighResolutionCapable":    True,
+        "NSPrincipalClass":               "NSApplication",
+        "NSHighResolutionCapable":        True,
         "NSRequiresAquaSystemAppearance": False,
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleName":               "GRACE",
-        "CFBundleDisplayName":        "GRACE",
+        "CFBundleShortVersionString":     "1.0.0",
+        "CFBundleName":                   "GRACE",
+        "CFBundleDisplayName":            "GRACE",
     },
 )

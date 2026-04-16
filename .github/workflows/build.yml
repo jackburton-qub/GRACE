@@ -1,4 +1,4 @@
-name: Build Windows, Mac and Linux Executables
+name: Build Windows and Mac Executables
 
 on:
   push:
@@ -6,6 +6,10 @@ on:
       - 'v*'
 
 jobs:
+
+  # ---------------------------------------------------------------------------
+  # Windows
+  # ---------------------------------------------------------------------------
   build-windows:
     runs-on: windows-latest
 
@@ -19,22 +23,36 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download BLAST+ binaries (Windows)
+        shell: powershell
         run: |
-          pip install -r requirements.txt
+          $url = "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-win64.tar.gz"
+          Invoke-WebRequest -Uri $url -OutFile blast.tar.gz
+          tar -xzf blast.tar.gz
+          New-Item -ItemType Directory -Force -Path blast\windows
+          Copy-Item "ncbi-blast-2.17.0+\bin\blastn.exe"              blast\windows\
+          Copy-Item "ncbi-blast-2.17.0+\bin\blastn.exe.manifest"     blast\windows\
+          Copy-Item "ncbi-blast-2.17.0+\bin\makeblastdb.exe"         blast\windows\
+          Copy-Item "ncbi-blast-2.17.0+\bin\makeblastdb.exe.manifest" blast\windows\
+          Copy-Item "ncbi-blast-2.17.0+\bin\ncbi-vdb-md.dll"         blast\windows\
+          Copy-Item "ncbi-blast-2.17.0+\bin\nghttp2.dll"             blast\windows\
 
       - name: Build executable
-        run: |
-          pyinstaller --onefile --windowed --add-data "assets;assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
+        run: pyinstaller GRACE.spec
 
-      - name: Rename executable
-        run: mv dist/main.exe dist/GRACE-Windows-x64.exe
+      - name: Zip release folder
+        run: Compress-Archive -Path dist\GRACE -DestinationPath dist\GRACE-Windows-x64.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GRACE-Windows-x64.exe
-          name: GRACE v1.0.0
+          files: dist/GRACE-Windows-x64.zip
 
+  # ---------------------------------------------------------------------------
+  # macOS
+  # ---------------------------------------------------------------------------
   build-mac:
     runs-on: macos-latest
 
@@ -48,47 +66,25 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r mac/requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Download BLAST+ binaries (macOS)
+        run: |
+          curl -o blast.tar.gz "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-macosx.tar.gz"
+          tar -xzf blast.tar.gz
+          mkdir -p blast/mac
+          cp ncbi-blast-2.17.0+/bin/blastn      blast/mac/
+          cp ncbi-blast-2.17.0+/bin/makeblastdb blast/mac/
+          chmod +x blast/mac/blastn
+          chmod +x blast/mac/makeblastdb
 
       - name: Build executable
-        run: |
-          cd mac
-          pyinstaller --onedir --windowed --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 --name GRACE-macOS main.py
+        run: pyinstaller GRACE_mac.spec
 
       - name: Zip app bundle
-        run: ditto -c -k --sequesterRsrc --keepParent mac/dist/GRACE-macOS.app mac/dist/GRACE-macOS.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/GRACE/GRACE.app dist/GRACE-macOS.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mac/dist/GRACE-macOS.zip
-          name: GRACE v1.0.0
-
-  build-linux:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --add-data "assets:assets" --hidden-import primer3 --hidden-import primer3.bindings --collect-all primer3 main.py
-
-      - name: Rename executable
-        run: mv dist/main dist/GRACE-Linux-x64
-
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/GRACE-Linux-x64
-          name: GRACE v1.0.0
+          files: dist/GRACE-macOS.zip

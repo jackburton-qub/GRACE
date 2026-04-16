@@ -32,6 +32,10 @@ __pycache__/
 *.nto
 grace_blast_*/
 
+# ── BLAST binaries (downloaded separately, not committed) ─
+blast/windows/
+blast/mac/
+
 # ── Session and autosave files ───────────────────────────
 *.json
 .grace_autosave.json

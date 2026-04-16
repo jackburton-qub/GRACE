@@ -1,6 +1,6 @@
 # GRACE.spec
 # ----------
-# PyInstaller build spec for GRACE (PyQt6 version) — single executable.
+# PyInstaller build spec for GRACE (PyQt6 version) — Windows build.
 #
 # Produces a single folder in dist/GRACE/ containing GRACE.exe
 #
@@ -9,6 +9,14 @@
 #
 # Or directly:
 #   pyinstaller GRACE.spec
+#
+# Before building, ensure BLAST+ binaries are in blast/windows/:
+#   blast/windows/blastn.exe
+#   blast/windows/blastn.exe.manifest
+#   blast/windows/makeblastdb.exe
+#   blast/windows/makeblastdb.exe.manifest
+#   blast/windows/ncbi-vdb-md.dll
+#   blast/windows/nghttp2.dll
 
 import sys
 import os
@@ -33,10 +41,12 @@ numpy_hiddenimports  = collect_submodules("numpy")
 # ---------------------------------------------------------------------------
 
 app_datas = [
-    ("main.py",   "."),
-    ("app_state.py", "."),
-    ("ui",        "ui"),
-    ("core",      "core"),
+    ("main.py",          "."),
+    ("app_state.py",     "."),
+    ("ui",               "ui"),
+    ("core",             "core"),
+    ("assets",           "assets"),
+    ("blast/windows",    "blast/windows"),   # bundled BLAST+ binaries for Windows
 ]
 
 # ---------------------------------------------------------------------------
@@ -132,10 +142,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False,       # no console window for end users
+    upx=False,          # UPX disabled — corrupts .pyd and .exe files
+    console=False,
     windowed=True,
-    icon="grace_icon.ico",   # replace with grace_icon.icns on Mac
+    icon="grace_icon.ico",
 )
 
 coll = COLLECT(
@@ -144,12 +154,12 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,          # UPX disabled — corrupts .pyd and .exe files
     upx_exclude=[],
-    name="GRACE",        # → dist/GRACE/
+    name="GRACE",       # → dist/GRACE/
 )
 
-# Mac .app bundle (ignored on Windows/Linux)
+# Mac .app bundle (ignored on Windows)
 app = BUNDLE(
     coll,
     name="GRACE.app",
