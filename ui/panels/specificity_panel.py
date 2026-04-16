@@ -208,7 +208,12 @@ class SpecificityPanel(QWidget):
         self.run_btn = QPushButton("Run Specificity Check")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
-        run_row.addWidget(self.run_btn); run_row.addStretch()
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._cancel)
+        run_row.addWidget(self.run_btn)
+        run_row.addWidget(self.cancel_btn)
+        run_row.addStretch()
         L.addLayout(run_row)
 
         self.progress_bar = QProgressBar()
@@ -273,6 +278,7 @@ class SpecificityPanel(QWidget):
         sp.max_total_hits              = self.max_hits.value()
 
         self.run_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True)
         self._set_status(f"Running BLAST on {len(_primers):,} primers...", TEXT_SECONDARY)
         self.mw.set_status("Running BLAST...")
@@ -293,6 +299,7 @@ class SpecificityPanel(QWidget):
         n_fail = len(results) - n_pass
 
         self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         self._set_status(
             f"BLAST complete — {n_pass:,} PASS, {n_fail:,} FAIL. Navigate to BLAST Results to view.",
@@ -300,15 +307,42 @@ class SpecificityPanel(QWidget):
         )
         self.mw.set_status(f"Specificity check complete — {n_pass:,} primers passed")
         self.mw.on_step_complete(3)
+        self._cleanup_worker()
 
     def _on_error(self, msg):
         self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         if "not found" in msg.lower() or "no such file" in msg.lower():
             self._set_status("BLAST+ executables not found. Check the bin directory path above.", ERROR)
         else:
             self._set_status(f"BLAST failed: {msg}", ERROR)
         self.mw.set_status("Specificity check failed")
+        self._cleanup_worker()
+
+    def _cancel(self):
+        if self._worker is not None:
+            self._worker.terminate()
+            self._worker.wait()
+            self._cleanup_worker()
+        self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self._set_status("Cancelled", WARNING)
+        self.mw.set_status("Specificity check cancelled")
+
+    def _cleanup_worker(self):
+        """Disconnect signals and null large refs to prevent idle crashes."""
+        if self._worker is not None:
+            try:
+                self._worker.finished.disconnect()
+                self._worker.error.disconnect()
+            except Exception:
+                pass
+            self._worker.primers            = None
+            self._worker.blast_params       = None
+            self._worker.specificity_params = None
+            self._worker = None
 
     def _set_status(self, msg, color):
         self.status_label.setText(msg)

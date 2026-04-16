@@ -276,9 +276,9 @@ def design_primers_for_all_ssrs(
     n_workers = max(1, os.cpu_count() or 1)
     update_interval = max(1, total // 100)
 
-    # Build task args — extract template sequences here so workers receive
-    # only small plain-data tuples. Passing the full genome dict or full SSR
-    # dicts across the spawn pipe causes BrokenPipeError on large datasets.
+    # Build task args — extract only what _design_one needs.
+    # Passing full SSR dicts or the genome across the spawn pipe causes
+    # BrokenPipeError on large datasets (>50k SSRs).
     task_args = []
     for ssr in ssr_list:
         contig   = ssr["contig"]
@@ -290,7 +290,6 @@ def design_primers_for_all_ssrs(
         template    = full_seq[left_bound:right_bound]
         target_start = (start - 1) - left_bound
         target_len   = end - (start - 1)
-        # Only pass fields _design_one actually uses — keeps pickle payload small
         ssr_slim = {
             "ssr_id":          ssr["ssr_id"],
             "contig":          ssr["contig"],

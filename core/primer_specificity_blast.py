@@ -283,10 +283,7 @@ def _pair_hits(
         n_right_hits    = len(right_locations)
 
         # Find all in-range amplicons.
-        # Guard against O(n²) explosion on highly repetitive genomes —
-        # if either primer has an unusually large number of hits, cap the
-        # search to avoid hanging. Pairs with >200 hits per side are
-        # almost certainly non-specific and will FAIL anyway.
+        # Guard against O(n²) explosion on repetitive genomes — cap hits per side.
         MAX_HITS_PER_SIDE = 200
         left_search  = left_hits[:MAX_HITS_PER_SIDE]
         right_search = right_hits[:MAX_HITS_PER_SIDE]
@@ -385,16 +382,26 @@ def check_specificity_blast(
     if specificity_params is None:
         specificity_params = SpecificityParams()
 
-    blastn = "blastn"
-    makeblastdb = "makeblastdb"
+    # On Windows, executables need the .exe suffix when given as an explicit
+    # path. When relying on PATH (no blast_bin_dir), omit the suffix so the
+    # shell can resolve it normally on all platforms.
+    # os.path.join handles spaces correctly as long as we never shell=True.
+    exe_suffix = ".exe" if sys.platform == "win32" else ""
+
     if blast_bin_dir:
-        blastn = os.path.join(blast_bin_dir, "blastn")
-        makeblastdb = os.path.join(blast_bin_dir, "makeblastdb")
+        blastn      = os.path.join(blast_bin_dir.strip(), f"blastn{exe_suffix}")
+        makeblastdb = os.path.join(blast_bin_dir.strip(), f"makeblastdb{exe_suffix}")
+    else:
+        blastn      = "blastn"
+        makeblastdb = "makeblastdb"
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        db_prefix = os.path.join(tmpdir, "genome_db")
+        db_prefix  = os.path.join(tmpdir, "genome_db")
         primers_fa = os.path.join(tmpdir, "primers.fasta")
-        out_tab = os.path.join(tmpdir, "blast_out.tsv")
+        out_tab    = os.path.join(tmpdir, "blast_out.tsv")
+
+        # Normalise genome path — strip accidental whitespace
+        genome_fasta = genome_fasta.strip()
 
         # Build BLAST database
         _run_cmd([

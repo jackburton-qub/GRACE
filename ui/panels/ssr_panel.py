@@ -19,8 +19,8 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
-# Maximum rows rendered in the SSR table. Beyond this the main thread
-# freezes for tens of seconds. Full data always lives in state and CSV.
+# Cap table display to prevent main-thread freeze on large datasets.
+# Full data always lives in state.ssrs and is used for CSV/primer design.
 TABLE_DISPLAY_LIMIT = 10_000
 
 
@@ -62,6 +62,7 @@ class SSRPanel(QWidget):
         self.state   = state
         self.mw      = main_window
         self._worker = None
+        self._last_rendered_version = -1   # stale-refresh guard
         self._build_ui()
 
     def _build_ui(self):
@@ -158,9 +159,15 @@ class SSRPanel(QWidget):
         self.run_btn = QPushButton("Run SSR Detection")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._cancel)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        run_row.addWidget(self.run_btn); run_row.addWidget(self.status_label); run_row.addStretch()
+        run_row.addWidget(self.run_btn)
+        run_row.addWidget(self.cancel_btn)
+        run_row.addWidget(self.status_label)
+        run_row.addStretch()
         layout.addLayout(run_row)
 
         self.progress_bar = QProgressBar()
@@ -227,6 +234,7 @@ class SSRPanel(QWidget):
             "min_contig_len": self.min_contig.value(),
         }
         self.run_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
         self._set_status("Scanning...", TEXT_SECONDARY)
         self.mw.set_status("Running SSR detection...")
@@ -235,6 +243,17 @@ class SSRPanel(QWidget):
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.start()
+
+    def _cancel(self):
+        if self._worker is not None:
+            self._worker.terminate()
+            self._worker.wait()
+            self._cleanup_worker()
+        self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self._set_status("Cancelled", WARNING)
+        self.mw.set_status("SSR detection cancelled")
 
     def _on_progress(self, done, total):
         self.progress_bar.setMaximum(total); self.progress_bar.setValue(done)
@@ -245,7 +264,9 @@ class SSRPanel(QWidget):
         self.state.ssrs = ssrs
         self.state.ssr_detection_time = elapsed
         self.state.selected_ssrs = None
+        self.state.ssr_version += 1
         self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         self._set_status(f"Found {len(ssrs):,} SSRs in {elapsed:.1f}s", SUCCESS)
         self.mw.set_status(f"SSR detection complete — {len(ssrs):,} SSRs found")
@@ -255,17 +276,14 @@ class SSRPanel(QWidget):
 
     def _on_error(self, msg):
         self.run_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         self._set_status(f"Error: {msg}", ERROR)
         self.mw.set_status("SSR detection failed")
         self._cleanup_worker()
 
     def _cleanup_worker(self):
-        """Disconnect signals and drop all large refs so Qt doesn't hold
-        the genome dict or SSR list alive after the thread finishes.
-        Without this the worker stays in memory until the next run, and
-        Qt can crash if it tries to emit into a partially-destroyed widget
-        after ~20 minutes of idle."""
+        """Disconnect signals and null large refs to prevent idle crashes."""
         if self._worker is not None:
             try:
                 self._worker.progress.disconnect()
@@ -273,7 +291,7 @@ class SSRPanel(QWidget):
                 self._worker.error.disconnect()
             except Exception:
                 pass
-            self._worker.genome = None   # release genome ref immediately
+            self._worker.genome = None
             self._worker.params = None
             self._worker = None
 
@@ -284,29 +302,29 @@ class SSRPanel(QWidget):
     def _refresh(self):
         if not self.state.has_ssrs:
             self.results_group.setVisible(False); return
+        # Skip re-render if data hasn't changed since last render
+        if self.state.ssr_version == self._last_rendered_version:
+            return
+        self._last_rendered_version = self.state.ssr_version
         self.results_group.setVisible(True)
         import pandas as pd
         ssrs = self.state.ssrs
         df = pd.DataFrame(ssrs)
         t = self.state.ssr_detection_time
-        self.metrics_label.setText(
+        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+        metrics = (
             f"{len(ssrs):,} SSRs   |   {df['motif'].nunique():,} unique motifs   |   "
             f"{df['contig'].nunique():,} contigs" + (f"   |   {t:.1f}s" if t else "")
         )
+        if truncated:
+            metrics += f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
+        self.metrics_label.setText(metrics)
+
         cols = ["ssr_id","contig","start","end","motif","canonical_motif","repeat_count"]
         col_labels = {"ssr_id":"SSR ID","contig":"Contig","start":"Start (bp)","end":"End (bp)",
                       "motif":"Motif","canonical_motif":"Canonical motif","repeat_count":"Repeat count"}
         display_cols = [c for c in cols if c in df.columns]
-
-        # Cap display rows to avoid freezing the main thread on large datasets.
-        # Full data is always in state.ssrs and available for export/primer design.
-        truncated = len(df) > TABLE_DISPLAY_LIMIT
-        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
-        if truncated:
-            self.metrics_label.setText(
-                self.metrics_label.text() +
-                f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
-            )
 
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(display_df))
@@ -314,16 +332,14 @@ class SSRPanel(QWidget):
         self.table.setHorizontalHeaderLabels([col_labels.get(c, c) for c in display_cols])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
-        # Store ssr_id in each row's first column UserRole so selection
-        # works correctly even when the table is sorted or truncated.
-        ssr_id_col = display_cols.index("ssr_id") if "ssr_id" in display_cols else None
         for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
                 val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 item = QTableWidgetItem(str(val))
                 if col_idx == 0:
-                    # Store the actual ssr_id as item data for safe selection lookup
-                    item.setData(Qt.ItemDataRole.UserRole, int(display_df.iat[row_idx, display_df.columns.get_loc("ssr_id")]))
+                    # Store ssr_id in UserRole so selection works correctly after sort
+                    item.setData(Qt.ItemDataRole.UserRole,
+                                 int(display_df.iat[row_idx, display_df.columns.get_loc("ssr_id")]))
                 self.table.setItem(row_idx, col_idx, item)
         self.table.setSortingEnabled(True)
 
@@ -333,7 +349,6 @@ class SSRPanel(QWidget):
             self.sel_count_label.setText("")
             self.state.selected_ssrs = None
             return
-        # Read ssr_id from UserRole data stored in col 0 — safe after sort/truncation
         ssr_id_set = set()
         for row in rows:
             item = self.table.item(row, 0)

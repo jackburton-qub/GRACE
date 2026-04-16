@@ -19,9 +19,8 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
-# Cap table display to prevent main-thread freeze on large primer sets.
-# Full data is always in state and available for export/BLAST.
 TABLE_DISPLAY_LIMIT = 10_000
+PRIMER_DESIGN_WARN_THRESHOLD = 50_000   # warn user before designing primers for huge SSR sets
 
 
 def _lbl(text, tip=None):
@@ -63,6 +62,7 @@ class PrimerPanel(QWidget):
     def __init__(self, state, main_window):
         super().__init__()
         self.state = state; self.mw = main_window; self._worker = None
+        self._last_rendered_version = -1
         self._build_ui()
 
     def _build_ui(self):
@@ -175,7 +175,12 @@ class PrimerPanel(QWidget):
         self.run_sel_btn = QPushButton("Design for selected SSRs")
         self.run_sel_btn.clicked.connect(lambda: self._run("selected"))
         self.run_sel_btn.setToolTip("Design primers only for SSRs selected in the SSR Detection table.")
-        run_row.addWidget(self.run_all_btn); run_row.addWidget(self.run_sel_btn); run_row.addStretch()
+        run_row.addWidget(self.run_all_btn); run_row.addWidget(self.run_sel_btn)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._cancel)
+        run_row.addWidget(self.cancel_btn)
+        run_row.addStretch()
         rg.addLayout(run_row)
         self.run_status = QLabel("")
         self.run_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
@@ -256,6 +261,22 @@ class PrimerPanel(QWidget):
         else:
             ssr_list = self.state.ssrs
 
+        # Warn if SSR count is very large — suggest using a selection instead
+        if len(ssr_list) > PRIMER_DESIGN_WARN_THRESHOLD:
+            from PyQt6.QtWidgets import QMessageBox
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Large Dataset Warning")
+            msg.setText(
+                f"You are about to design primers for {len(ssr_list):,} SSRs.\n\n"
+                f"This may take a long time and use significant memory.\n"
+                f"Consider selecting a subset on the SSR Detection page first."
+            )
+            msg.addButton("Continue anyway", QMessageBox.ButtonRole.AcceptRole)
+            cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() == cancel:
+                return
+
         primer_opts = {
             "PRIMER_MIN_SIZE": self.primer_min_size.value(),
             "PRIMER_OPT_SIZE": self.primer_opt_size.value(),
@@ -275,6 +296,7 @@ class PrimerPanel(QWidget):
         self.state.product_min = params["product_min"]
         self.state.product_max = params["product_max"]
         self.run_all_btn.setEnabled(False); self.run_sel_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
         self._set_status(f"Designing primers for {len(ssr_list):,} SSRs...", TEXT_SECONDARY)
         self.mw.set_status("Running Primer3...")
@@ -293,8 +315,8 @@ class PrimerPanel(QWidget):
         self.state.clear_downstream_of_primers()
         self.state.primer_results = primers
         self.state.filtered_primer_results = primers
+        self.state.primer_version += 1
 
-        # Set filter defaults from data range
         if primers:
             import pandas as pd
             df = pd.DataFrame(primers)
@@ -310,6 +332,7 @@ class PrimerPanel(QWidget):
 
         self._apply_filters()
         self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         msg = f"{len(primers):,} primer pairs designed in {elapsed:.1f}s"
         if n_failed: msg += f" — {n_failed} SSRs failed"
@@ -320,15 +343,25 @@ class PrimerPanel(QWidget):
 
     def _on_error(self, msg):
         self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         self._set_status(f"Error: {msg}", ERROR)
         self.mw.set_status("Primer design failed")
         self._cleanup_worker()
 
+    def _cancel(self):
+        if self._worker is not None:
+            self._worker.terminate()
+            self._worker.wait()
+            self._cleanup_worker()
+        self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self._set_status("Cancelled", WARNING)
+        self.mw.set_status("Primer design cancelled")
+
     def _cleanup_worker(self):
-        """Disconnect signals and release large refs from the worker thread.
-        Prevents Qt from holding the genome dict and SSR list alive after the
-        thread finishes, which causes idle crashes after ~20 minutes."""
+        """Disconnect signals and null large refs to prevent idle crashes."""
         if self._worker is not None:
             try:
                 self._worker.progress.disconnect()
@@ -394,6 +427,10 @@ class PrimerPanel(QWidget):
             )
         if not self.state.has_primers:
             self.results_group.setVisible(False); return
+        # Skip re-render if data hasn't changed since last render
+        if self.state.primer_version == self._last_rendered_version:
+            return
+        self._last_rendered_version = self.state.primer_version
         self.results_group.setVisible(True)
         self._apply_filters()
         self._populate_table()
@@ -404,9 +441,15 @@ class PrimerPanel(QWidget):
         primers = self.state.filtered_primer_results or self.state.primer_results
         df = pd.DataFrame(primers)
         total = len(self.state.primer_results)
-        self.metrics_label.setText(
-            f"{total:,} primer pairs designed   |   {len(primers):,} pass quality filters   |   {df['ssr_id'].nunique():,} SSRs covered"
+        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+        metrics = (
+            f"{total:,} primer pairs designed   |   {len(primers):,} pass quality filters   |   "
+            f"{df['ssr_id'].nunique():,} SSRs covered"
         )
+        if truncated:
+            metrics += f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
+        self.metrics_label.setText(metrics)
         COLS = {
             "ssr_id":"SSR ID","pair_rank":"Pair rank","contig":"Contig","motif":"Motif",
             "left_primer":"Forward primer","right_primer":"Reverse primer",
@@ -415,17 +458,7 @@ class PrimerPanel(QWidget):
             "left_gc":"Forward GC (%)","right_gc":"Reverse GC (%)",
             "left_3end_dg":"Forward 3' stability","right_3end_dg":"Reverse 3' stability",
         }
-        display_cols = [c for c in COLS if c in df.columns]
-
-        # Cap display rows to avoid freezing the main thread on large datasets.
-        truncated = len(df) > TABLE_DISPLAY_LIMIT
-        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
-        if truncated:
-            self.metrics_label.setText(
-                self.metrics_label.text() +
-                f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
-            )
-
+        display_cols = [c for c in COLS if c in display_df.columns]
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(display_df)); self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels([COLS[c] for c in display_cols])

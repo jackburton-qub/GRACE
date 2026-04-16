@@ -11,13 +11,17 @@ from PyQt6.QtWidgets import (
     QCheckBox,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 
 from ui.style import (
     ACCENT, SUCCESS, ERROR, WARNING, TEXT_SECONDARY, TEXT_PRIMARY,
     FONT_UI, FONT_MONO, FONT_SIZE_NORMAL, FONT_SIZE_LARGE,
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
+
+# Cap table rows to prevent main-thread freeze on large datasets.
+TABLE_DISPLAY_LIMIT = 10_000
+RAW_TABLE_LIMIT     = 5_000   # raw BLAST hits can be enormous — cap lower
 
 
 
@@ -48,6 +52,7 @@ class ResultsPanel(QWidget):
         super().__init__()
         self.state = state
         self.mw    = main_window
+        self._last_rendered_version = -1
         self._build_ui()
 
     def _build_ui(self):
@@ -167,12 +172,14 @@ class ResultsPanel(QWidget):
         self.summary_group.setVisible(has)
         self.no_results_label.setVisible(not has)
 
-        # Find results_group and raw_group widgets
-        for i in range(self.layout().count() if False else 0): pass  # noop
-        # Toggle via the scroll content
         if not has:
             self._clear_tables()
             return
+
+        # Skip re-render if data hasn't changed since last render
+        if self.state.blast_version == self._last_rendered_version:
+            return
+        self._last_rendered_version = self.state.blast_version
 
         import pandas as pd
         spec_df   = pd.DataFrame(self.state.specificity_results)
@@ -209,6 +216,7 @@ class ResultsPanel(QWidget):
         if not self.state.has_specificity:
             return
         import pandas as pd
+        from PyQt6.QtGui import QColor
         spec_df = pd.DataFrame(self.state.specificity_results)
         if self.pass_only_cb.isChecked():
             df = spec_df[spec_df["specificity_status"] == "PASS"].copy()
@@ -235,26 +243,35 @@ class ResultsPanel(QWidget):
         exclude = {"amplicons", "left_hits", "right_hits", "pass_mode"}
         display_cols = [c for c in COLS if c in df.columns and c not in exclude]
 
+        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(df))
+        self.table.setRowCount(len(display_df))
         self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels([COLS[c] for c in display_cols])
 
-        for row_idx in range(len(df)):
+        for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val = df.iat[row_idx, df.columns.get_loc(col)]
+                val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
                 item = QTableWidgetItem(text)
-                # Colour status column
                 if col == "specificity_status":
                     if text == "PASS":
-                        item.setForeground(__import__('PyQt6.QtGui', fromlist=['QColor']).QColor(SUCCESS))
+                        item.setForeground(QColor(SUCCESS))
                     elif text == "FAIL":
-                        item.setForeground(__import__('PyQt6.QtGui', fromlist=['QColor']).QColor(ERROR))
+                        item.setForeground(QColor(ERROR))
                 self.table.setItem(row_idx, col_idx, item)
 
         self.table.resizeColumnsToContents()
         self.table.setSortingEnabled(True)
+
+        if truncated:
+            # Update metrics label to note truncation
+            current = self.metric_labels["Pass rate"].toolTip()
+            self.table.setToolTip(
+                f"Showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
+            )
 
     def _populate_raw_table(self):
         raw = self.state.blast_raw_rows
@@ -278,19 +295,27 @@ class ResultsPanel(QWidget):
         }
         display_cols = [c for c in COL_RENAME if c in raw.columns]
 
+        truncated = len(raw) > RAW_TABLE_LIMIT
+        display_raw = raw.iloc[:RAW_TABLE_LIMIT] if truncated else raw
+
         self.raw_table.setSortingEnabled(False)
-        self.raw_table.setRowCount(len(raw))
+        self.raw_table.setRowCount(len(display_raw))
         self.raw_table.setColumnCount(len(display_cols))
         self.raw_table.setHorizontalHeaderLabels([COL_RENAME[c] for c in display_cols])
 
-        for row_idx in range(len(raw)):
+        for row_idx in range(len(display_raw)):
             for col_idx, col in enumerate(display_cols):
-                val = raw.iat[row_idx, raw.columns.get_loc(col)]
+                val = display_raw.iat[row_idx, display_raw.columns.get_loc(col)]
                 text = f"{val:.4f}" if isinstance(val, float) else ("" if val is None else str(val))
                 self.raw_table.setItem(row_idx, col_idx, QTableWidgetItem(text))
 
         self.raw_table.resizeColumnsToContents()
         self.raw_table.setSortingEnabled(True)
+
+        if truncated:
+            self.raw_table.setToolTip(
+                f"Showing first {RAW_TABLE_LIMIT:,} rows — download CSV for full results"
+            )
 
     def _clear_tables(self):
         self.table.setRowCount(0)
