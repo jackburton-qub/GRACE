@@ -13,18 +13,19 @@
 # Before building, ensure BLAST+ binaries are in blast/mac/:
 #   blast/mac/blastn
 #   blast/mac/makeblastdb
-# (chmod +x both files on Mac before building)
 
 import sys
 import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 
 # ---------------------------------------------------------------------------
-# Collect packages PyInstaller cannot fully analyse automatically
+# Collect packages
 # ---------------------------------------------------------------------------
 
-qt_datas, qt_binaries, qt_hiddenimports = collect_all("PyQt6")
-primer3_datas, primer3_binaries, primer3_hiddenimports = collect_all("primer3")
+qt_datas,       qt_binaries,       qt_hiddenimports       = collect_all("PyQt6")
+primer3_datas,  primer3_binaries,  primer3_hiddenimports  = collect_all("primer3")
+reportlab_datas,reportlab_binaries,reportlab_hiddenimports= collect_all("reportlab")
+
 pandas_hiddenimports = collect_submodules("pandas")
 numpy_hiddenimports  = collect_submodules("numpy")
 
@@ -48,6 +49,7 @@ app_datas = [
 all_hidden = (
     qt_hiddenimports
     + primer3_hiddenimports
+    + reportlab_hiddenimports
     + pandas_hiddenimports
     + numpy_hiddenimports
     + [
@@ -72,6 +74,16 @@ all_hidden = (
         "shutil",
         "itertools",
         "functools",
+        "bisect",
+        "collections",
+        "reportlab",
+        "reportlab.lib",
+        "reportlab.lib.pagesizes",
+        "reportlab.lib.styles",
+        "reportlab.lib.units",
+        "reportlab.lib.colors",
+        "reportlab.platypus",
+        "reportlab.pdfgen",
     ]
 )
 
@@ -79,8 +91,18 @@ all_hidden = (
 # Combined datas and binaries
 # ---------------------------------------------------------------------------
 
-all_datas    = app_datas + qt_datas + primer3_datas
-all_binaries = qt_binaries + primer3_binaries
+all_datas = (
+    app_datas
+    + qt_datas
+    + primer3_datas
+    + reportlab_datas
+)
+
+all_binaries = (
+    qt_binaries
+    + primer3_binaries
+    + reportlab_binaries
+)
 
 # ---------------------------------------------------------------------------
 # ANALYSIS
