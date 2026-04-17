@@ -19,10 +19,12 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
-# Cap table display to prevent main-thread freeze on large datasets.
-# Full data always lives in state.ssrs and is used for CSV/primer design.
 TABLE_DISPLAY_LIMIT = 10_000
 
+
+# ---------------------------------------------------------------------------
+# SSR detection worker
+# ---------------------------------------------------------------------------
 
 class SSRWorker(QThread):
     progress = pyqtSignal(int, int)
@@ -36,9 +38,6 @@ class SSRWorker(QThread):
 
     def run(self):
         try:
-            _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            if _root not in sys.path:
-                sys.path.insert(0, _root)
             from core.ssr_detection import find_ssrs
             start = time.time()
             ssrs = find_ssrs(
@@ -56,17 +55,49 @@ class SSRWorker(QThread):
             self.error.emit(str(e))
 
 
+# ---------------------------------------------------------------------------
+# GFF annotation worker
+# ---------------------------------------------------------------------------
+
+class GFFAnnotationWorker(QThread):
+    # annotated ssrs, gff_index, chrom_names dict
+    finished = pyqtSignal(list, object, dict)
+    error    = pyqtSignal(str)
+
+    def __init__(self, ssrs, gff_path, gff_features):
+        super().__init__()
+        self.ssrs         = ssrs
+        self.gff_path     = gff_path
+        self.gff_features = gff_features
+
+    def run(self):
+        try:
+            from core.gff_parser import build_gff_index, annotate_ssrs
+            if self.gff_features is None:
+                index = build_gff_index(self.gff_path)
+            else:
+                index = self.gff_features
+            annotated = annotate_ssrs(self.ssrs, index)
+            self.finished.emit(annotated, index, dict(index.chrom_names))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Panel
+# ---------------------------------------------------------------------------
+
 class SSRPanel(QWidget):
     def __init__(self, state, main_window):
         super().__init__()
         self.state   = state
         self.mw      = main_window
-        self._worker = None
-        self._last_rendered_version = -1   # stale-refresh guard
+        self._worker     = None
+        self._gff_worker = None
+        self._last_rendered_version = -1
         self._build_ui()
 
     def _build_ui(self):
-        # One scroll area, everything inside
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -96,7 +127,11 @@ class SSRPanel(QWidget):
         sg.setSpacing(10)
 
         lbl_motif = QLabel("Motif lengths")
-        lbl_motif.setToolTip("Select which repeat unit sizes to search for.\nDi- (2bp) and tri- (3bp) nucleotide repeats are most informative\nfor population genetics and marker development.")
+        lbl_motif.setToolTip(
+            "Select which repeat unit sizes to search for.\n"
+            "Di- (2bp) and tri- (3bp) nucleotide repeats are most informative\n"
+            "for population genetics and marker development."
+        )
         sg.addWidget(lbl_motif, 0, 0)
         motif_row = QHBoxLayout()
         self.motif_checks = {}
@@ -111,32 +146,47 @@ class SSRPanel(QWidget):
         sg.addWidget(motif_w, 0, 1, 1, 3)
 
         lbl_contig = QLabel("Min contig length (bp)")
-        lbl_contig.setToolTip("Skip contigs shorter than this length.\nContigs under ~300bp cannot yield usable SSR markers.\nIncreasing this speeds up scanning on fragmented assemblies.")
+        lbl_contig.setToolTip(
+            "Skip contigs shorter than this length.\n"
+            "Contigs under ~300bp cannot yield usable SSR markers."
+        )
         sg.addWidget(lbl_contig, 1, 0)
         self.min_contig = QSpinBox()
-        self.min_contig.setRange(0, 100000); self.min_contig.setValue(300); self.min_contig.setSingleStep(50)
+        self.min_contig.setRange(0, 100000)
+        self.min_contig.setValue(300)
+        self.min_contig.setSingleStep(50)
         sg.addWidget(self.min_contig, 1, 1)
 
         lbl_std = QLabel("Motif standardisation")
-        lbl_std.setToolTip("Controls how equivalent motifs are grouped.\nLevel 4 groups all rotations and strand orientations,\ne.g. AC, CA, TG, GT are all reported as AC.")
+        lbl_std.setToolTip(
+            "Controls how equivalent motifs are grouped.\n"
+            "Level 4 groups all rotations and strand orientations."
+        )
         sg.addWidget(lbl_std, 1, 2)
         self.std_level = QComboBox()
-        for lvl, desc in [(0,"0 — None"),(1,"1 — Smallest rotation"),(2,"2 — + reverse complement"),(3,"3 — Extended"),(4,"4 — Full canonical (recommended)")]:
+        for lvl, desc in [
+            (0, "0 — None"),
+            (1, "1 — Smallest rotation"),
+            (2, "2 — + reverse complement"),
+            (3, "3 — Extended"),
+            (4, "4 — Full canonical (recommended)"),
+        ]:
             self.std_level.addItem(desc, lvl)
         self.std_level.setCurrentIndex(4)
         sg.addWidget(self.std_level, 1, 3)
 
         self.excl_homo = QCheckBox("Exclude homopolymers")
         self.excl_homo.setChecked(True)
-        self.excl_homo.setToolTip("Exclude single-nucleotide runs (e.g. AAAAAAA).\nHomopolymers are uninformative as genetic markers. Recommended: on.")
+        self.excl_homo.setToolTip(
+            "Exclude single-nucleotide runs (e.g. AAAAAAA).\n"
+            "Homopolymers are uninformative as genetic markers."
+        )
         self.search_rev = QCheckBox("Search reverse complement strand")
         self.search_rev.setChecked(False)
-        self.search_rev.setToolTip("Also scan the reverse complement of each contig.\nMay produce duplicate entries for palindromic SSRs.")
         sg.addWidget(self.excl_homo,  2, 0, 1, 2)
         sg.addWidget(self.search_rev, 2, 2, 1, 2)
 
         rep_lbl = QLabel("Min repeat counts")
-        rep_lbl.setToolTip("The motif must occur this many times consecutively to be reported.\nRecommended: 6 for di-nucleotide, 5 for tri- and longer.")
         sg.addWidget(rep_lbl, 3, 0)
         self.min_repeats = {}
         self.min_repeat_labels = {}
@@ -187,7 +237,6 @@ class SSRPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
         self.table.setFixedHeight(500)
         res_layout.addWidget(self.table)
@@ -202,8 +251,10 @@ class SSRPanel(QWidget):
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.download_btn = QPushButton("Download SSR results (CSV)")
         self.download_btn.clicked.connect(self._download_csv)
-        sel_row.addWidget(self.sel_all_btn); sel_row.addWidget(self.desel_all_btn)
-        sel_row.addWidget(self.sel_count_label); sel_row.addStretch()
+        sel_row.addWidget(self.sel_all_btn)
+        sel_row.addWidget(self.desel_all_btn)
+        sel_row.addWidget(self.sel_count_label)
+        sel_row.addStretch()
         sel_row.addWidget(self.download_btn)
         res_layout.addLayout(sel_row)
 
@@ -219,6 +270,9 @@ class SSRPanel(QWidget):
             self.min_repeat_labels[k].setVisible(v)
             self.min_repeats[k].setVisible(v)
 
+    # ---------------------------------------------------------
+    # RUN
+    # ---------------------------------------------------------
     def _run(self):
         if not self.state.has_genome:
             self._set_status("Load a genome first", WARNING); return
@@ -226,12 +280,12 @@ class SSRPanel(QWidget):
         if not motif_lengths:
             self._set_status("Select at least one motif length", WARNING); return
         params = {
-            "motif_lengths": motif_lengths,
-            "min_repeats": {k: self.min_repeats[k].value() for k in motif_lengths},
+            "motif_lengths":        motif_lengths,
+            "min_repeats":          {k: self.min_repeats[k].value() for k in motif_lengths},
             "exclude_homopolymers": self.excl_homo.isChecked(),
-            "search_reverse": self.search_rev.isChecked(),
-            "std_level": self.std_level.currentData(),
-            "min_contig_len": self.min_contig.value(),
+            "search_reverse":       self.search_rev.isChecked(),
+            "std_level":            self.std_level.currentData(),
+            "min_contig_len":       self.min_contig.value(),
         }
         self.run_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
@@ -249,6 +303,10 @@ class SSRPanel(QWidget):
             self._worker.terminate()
             self._worker.wait()
             self._cleanup_worker()
+        if self._gff_worker is not None:
+            self._gff_worker.terminate()
+            self._gff_worker.wait()
+            self._gff_worker = None
         self.run_btn.setEnabled(True)
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
@@ -261,10 +319,10 @@ class SSRPanel(QWidget):
 
     def _on_done(self, ssrs, elapsed):
         self.state.clear_downstream_of_ssrs()
-        self.state.ssrs = ssrs
+        self.state.ssrs             = ssrs
         self.state.ssr_detection_time = elapsed
-        self.state.selected_ssrs = None
-        self.state.ssr_version += 1
+        self.state.selected_ssrs    = None
+        self.state.ssr_version     += 1
         self.run_btn.setEnabled(True)
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
@@ -273,6 +331,50 @@ class SSRPanel(QWidget):
         self.mw.on_step_complete(1)
         self._cleanup_worker()
         self._refresh()
+        if self.state.has_gff and ssrs:
+            self._run_gff_annotation(ssrs)
+
+    def _run_gff_annotation(self, ssrs):
+        self._set_status(
+            f"Found {len(ssrs):,} SSRs — annotating with GFF features...",
+            TEXT_SECONDARY
+        )
+        self.mw.set_status("Annotating SSRs with genomic features...")
+        self._gff_worker = GFFAnnotationWorker(
+            ssrs, self.state.gff_path, self.state.gff_features
+        )
+        self._gff_worker.finished.connect(self._on_gff_done)
+        self._gff_worker.error.connect(self._on_gff_error)
+        self._gff_worker.start()
+
+    def _on_gff_done(self, annotated_ssrs, gff_index, chrom_names):
+        self.state.ssrs         = annotated_ssrs
+        self.state.gff_features = gff_index
+        self.state.chrom_names  = chrom_names if chrom_names else {}
+        self.state.ssr_version += 1
+        n = len(annotated_ssrs)
+        chrom_note = f" — {len(chrom_names):,} chromosome names mapped" if chrom_names else ""
+        self._set_status(f"Found {n:,} SSRs — genomic features annotated ✓{chrom_note}", SUCCESS)
+        self.mw.set_status(f"SSR annotation complete — {n:,} SSRs annotated")
+        if self._gff_worker:
+            try:
+                self._gff_worker.finished.disconnect()
+                self._gff_worker.error.disconnect()
+            except Exception:
+                pass
+            self._gff_worker = None
+        self._refresh()
+
+    def _on_gff_error(self, msg):
+        self._set_status(f"SSRs found but GFF annotation failed: {msg}", WARNING)
+        self.mw.set_status("GFF annotation failed — SSRs available without feature labels")
+        if self._gff_worker:
+            try:
+                self._gff_worker.finished.disconnect()
+                self._gff_worker.error.disconnect()
+            except Exception:
+                pass
+            self._gff_worker = None
 
     def _on_error(self, msg):
         self.run_btn.setEnabled(True)
@@ -283,7 +385,6 @@ class SSRPanel(QWidget):
         self._cleanup_worker()
 
     def _cleanup_worker(self):
-        """Disconnect signals and null large refs to prevent idle crashes."""
         if self._worker is not None:
             try:
                 self._worker.progress.disconnect()
@@ -299,20 +400,24 @@ class SSRPanel(QWidget):
         self.status_label.setText(msg)
         self.status_label.setStyleSheet(f"color: {color}; font-size: {FONT_SIZE_SMALL}pt;")
 
+    # ---------------------------------------------------------
+    # REFRESH / TABLE
+    # ---------------------------------------------------------
     def _refresh(self):
         if not self.state.has_ssrs:
             self.results_group.setVisible(False); return
-        # Skip re-render if data hasn't changed since last render
         if self.state.ssr_version == self._last_rendered_version:
             return
         self._last_rendered_version = self.state.ssr_version
         self.results_group.setVisible(True)
+
         import pandas as pd
         ssrs = self.state.ssrs
-        df = pd.DataFrame(ssrs)
-        t = self.state.ssr_detection_time
-        truncated = len(df) > TABLE_DISPLAY_LIMIT
+        df   = pd.DataFrame(ssrs)
+        t    = self.state.ssr_detection_time
+        truncated  = len(df) > TABLE_DISPLAY_LIMIT
         display_df = df.iloc[:TABLE_DISPLAY_LIMIT] if truncated else df
+
         metrics = (
             f"{len(ssrs):,} SSRs   |   {df['motif'].nunique():,} unique motifs   |   "
             f"{df['contig'].nunique():,} contigs" + (f"   |   {t:.1f}s" if t else "")
@@ -321,26 +426,53 @@ class SSRPanel(QWidget):
             metrics += f"   |   showing first {TABLE_DISPLAY_LIMIT:,} rows — download CSV for full results"
         self.metrics_label.setText(metrics)
 
-        cols = ["ssr_id","contig","start","end","motif","canonical_motif","repeat_count"]
-        col_labels = {"ssr_id":"SSR ID","contig":"Contig","start":"Start (bp)","end":"End (bp)",
-                      "motif":"Motif","canonical_motif":"Canonical motif","repeat_count":"Repeat count"}
+        has_annotation = "genomic_feature" in df.columns
+        cols = ["ssr_id", "contig", "start", "end", "motif", "canonical_motif", "repeat_count"]
+        if has_annotation:
+            cols.append("genomic_feature")
+
+        col_labels = {
+            "ssr_id":          "SSR ID",
+            "contig":          "Contig",
+            "start":           "Start (bp)",
+            "end":             "End (bp)",
+            "motif":           "Motif",
+            "canonical_motif": "Canonical motif",
+            "repeat_count":    "Repeat count",
+            "genomic_feature": "Genomic feature",
+        }
         display_cols = [c for c in cols if c in df.columns]
 
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(display_df))
         self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels([col_labels.get(c, c) for c in display_cols])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+
+        # Column resize modes — contig gets fixed interactive width,
+        # others resize to content, last column stretches
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(True)
+        for col_idx, col in enumerate(display_cols):
+            if col == "contig":
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(col_idx, 160)
+            elif col in ("left_primer", "right_primer"):
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(col_idx, 200)
+            else:
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.ResizeToContents)
 
         for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
+                val  = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 item = QTableWidgetItem(str(val))
                 if col_idx == 0:
-                    # Store ssr_id in UserRole so selection works correctly after sort
-                    item.setData(Qt.ItemDataRole.UserRole,
-                                 int(display_df.iat[row_idx, display_df.columns.get_loc("ssr_id")]))
+                    item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        int(display_df.iat[row_idx, display_df.columns.get_loc("ssr_id")])
+                    )
                 self.table.setItem(row_idx, col_idx, item)
+
         self.table.setSortingEnabled(True)
 
     def _on_selection_changed(self):
@@ -358,7 +490,9 @@ class SSRPanel(QWidget):
                     ssr_id_set.add(uid)
         if ssr_id_set:
             ssr_by_id = {s["ssr_id"]: s for s in self.state.ssrs}
-            self.state.selected_ssrs = [ssr_by_id[i] for i in sorted(ssr_id_set) if i in ssr_by_id]
+            self.state.selected_ssrs = [
+                ssr_by_id[i] for i in sorted(ssr_id_set) if i in ssr_by_id
+            ]
         else:
             self.state.selected_ssrs = None
         count = len(self.state.selected_ssrs) if self.state.selected_ssrs else 0
@@ -366,12 +500,20 @@ class SSRPanel(QWidget):
 
     def _download_csv(self):
         if not self.state.has_ssrs: return
-        path, _ = QFileDialog.getSaveFileName(self, "Save SSR results", "ssr_detection_results.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save SSR results", "ssr_detection_results.csv", "CSV files (*.csv)"
+        )
         if path:
             import pandas as pd
             pd.DataFrame(self.state.ssrs).rename(columns={
-                "ssr_id":"SSR ID","contig":"Contig","start":"Start (bp)","end":"End (bp)",
-                "motif":"Motif","canonical_motif":"Canonical motif","repeat_count":"Repeat count"
+                "ssr_id":          "SSR ID",
+                "contig":          "Contig",
+                "start":           "Start (bp)",
+                "end":             "End (bp)",
+                "motif":           "Motif",
+                "canonical_motif": "Canonical motif",
+                "repeat_count":    "Repeat count",
+                "genomic_feature": "Genomic feature",
             }).to_csv(path, index=False, encoding="utf-8-sig")
             self.mw.set_status(f"Saved to {path}")
 

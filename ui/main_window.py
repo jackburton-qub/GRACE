@@ -23,17 +23,21 @@ from ui.style import (
 )
 from ui.panels.home_panel        import HomePanel
 from ui.panels.ssr_panel         import SSRPanel
+from ui.panels.ssr_summary_panel import SSRSummaryPanel
 from ui.panels.primer_panel      import PrimerPanel
 from ui.panels.specificity_panel import SpecificityPanel
 from ui.panels.results_panel     import ResultsPanel
+from ui.panels.report_panel      import ReportPanel
 
 
 STEPS = [
     (0, "01  Load Genome"),
     (1, "02  Detect SSRs"),
-    (2, "03  Design Primers"),
-    (3, "04  Check Specificity"),
-    (4, "05  BLAST Results"),
+    (2, "03  SSR Summary"),
+    (3, "04  Design Primers"),
+    (4, "05  Check Specificity"),
+    (5, "06  BLAST Results"),
+    (6, "07  Final Report"),
 ]
 
 
@@ -173,15 +177,19 @@ class MainWindow(QMainWindow):
 
         self.home_panel        = HomePanel(self.state, self)
         self.ssr_panel         = SSRPanel(self.state, self)
+        self.ssr_summary_panel = SSRSummaryPanel(self.state, self)
         self.primer_panel      = PrimerPanel(self.state, self)
         self.specificity_panel = SpecificityPanel(self.state, self)
         self.results_panel     = ResultsPanel(self.state, self)
+        self.report_panel      = ReportPanel(self.state, self)
 
         self.stack.addWidget(self.home_panel)
         self.stack.addWidget(self.ssr_panel)
+        self.stack.addWidget(self.ssr_summary_panel)
         self.stack.addWidget(self.primer_panel)
         self.stack.addWidget(self.specificity_panel)
         self.stack.addWidget(self.results_panel)
+        self.stack.addWidget(self.report_panel)
 
         root.addWidget(sidebar_container)
         root.addWidget(self.stack, 1)
@@ -201,14 +209,12 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         self.stack.setCurrentIndex(index)
-        # Notify panel it's being shown — lets panels refresh their display
         panel = self.stack.currentWidget()
         if hasattr(panel, "on_show"):
             panel.on_show()
 
     def _on_font_size_changed(self, btn):
-        """Rebuild and reapply the stylesheet when the user picks a font size."""
-        preset = btn.text()  # "Small", "Medium", or "Large"
+        preset = btn.text()
         if preset == self._font_preset:
             return
         self._font_preset = preset
@@ -226,11 +232,13 @@ class MainWindow(QMainWindow):
         s = self.state
 
         statuses = [
-            s.has_genome,
-            s.has_ssrs,
-            s.has_primers,
-            s.has_specificity,
-            s.has_specificity,
+            s.has_genome,       # 0 Load Genome
+            s.has_ssrs,         # 1 Detect SSRs
+            s.has_ssrs,         # 2 SSR Summary
+            s.has_primers,      # 3 Design Primers
+            s.has_specificity,  # 4 Check Specificity
+            s.has_specificity,  # 5 BLAST Results
+            s.has_specificity,  # 6 Final Report
         ]
 
         for i, (_, label) in enumerate(STEPS):
@@ -250,6 +258,6 @@ class MainWindow(QMainWindow):
         self.sidebar.setCurrentRow(step)
 
     def on_step_complete(self, step: int):
-        """Called by panels when a step completes — refreshes sidebar and advances."""
+        """Called by panels when a step completes — refreshes sidebar."""
         self.refresh_sidebar()
         self.set_status(f"Step {step + 1} complete")

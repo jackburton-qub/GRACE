@@ -281,7 +281,7 @@ class SpecificityPanel(QWidget):
             SUCCESS
         )
         self.mw.set_status(f"Specificity check complete — {n_pass:,} primers passed")
-        self.mw.on_step_complete(3)
+        self.mw.on_step_complete(4)
         self._cleanup_worker()
 
     def _on_error(self, msg):

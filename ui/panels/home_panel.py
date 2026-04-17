@@ -1,5 +1,5 @@
 """
-home_panel.py — Load Genome + Session Management
+home_panel.py — Load Genome + Optional GFF Annotation + Session Management
 """
 import os, sys, json
 
@@ -19,8 +19,8 @@ from ui.style import (
 SAVEABLE_KEYS = [
     "ssrs", "primer_results", "specificity_results",
     "genome_filename", "product_min", "product_max",
-    "blast_bin_dir",
     "filtered_primer_results",
+    "gff_filename", "gff_path",
 ]
 
 
@@ -39,25 +39,19 @@ def _state_to_dict(state):
 
 def _dict_to_state(state, payload):
     """Restore state from a plain dict."""
-    import pandas as pd
     for k in SAVEABLE_KEYS:
         if k not in payload:
             continue
         v = payload[k]
         setattr(state, k, v)
-    # blast_raw_rows lives on state but isn't in SAVEABLE_KEYS above
-    # — it gets rebuilt from specificity_results on next view
     # Version stamps need resetting based on what was restored
     if state.ssrs:
         state.ssr_version = 1
     if state.primer_results:
-        state.filtered_primer_results = state.primer_results  # restore filtered to full set
+        state.filtered_primer_results = state.primer_results
         state.primer_version = 1
     if state.specificity_results:
         state.blast_version = 1
-
-
-
 
 
 # ── Genome load worker ────────────────────────────────────
@@ -71,9 +65,6 @@ class GenomeLoadWorker(QThread):
 
     def run(self):
         try:
-            _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            if _root not in sys.path:
-                sys.path.insert(0, _root)
             from core.fasta_loader import load_sequence_file
             genome = load_sequence_file(self.path)
             self.finished.emit(genome, self.path)
@@ -88,7 +79,8 @@ class HomePanel(QWidget):
         self.state   = state
         self.mw      = main_window
         self._worker = None
-        self._selected_path = None
+        self._selected_path     = None
+        self._selected_gff_path = None
         self._build_ui()
 
     def _build_ui(self):
@@ -142,6 +134,48 @@ class HomePanel(QWidget):
         self.load_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
         lg.addWidget(self.load_status)
         L.addWidget(load_group)
+
+        # ── Load GFF annotation (optional) ───────────────
+        gff_group = QGroupBox("Genome Annotation (optional)")
+        gg = QVBoxLayout(gff_group)
+        gg.setSpacing(10)
+
+        gff_desc = QLabel(
+            "Load a GFF3 or GTF annotation file to enable genomic context analysis "
+            "(exon / intron / intergenic classification of SSRs). "
+            "Download the matching annotation from NCBI alongside your genome."
+        )
+        gff_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        gff_desc.setWordWrap(True)
+        gg.addWidget(gff_desc)
+
+        gff_path_row = QHBoxLayout()
+        self.gff_path_label = QLabel("No annotation file loaded")
+        self.gff_path_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        self.gff_path_label.setWordWrap(True)
+        self.gff_browse_btn = QPushButton("Browse...")
+        self.gff_browse_btn.setFixedWidth(100)
+        self.gff_browse_btn.clicked.connect(self._browse_gff)
+        gff_path_row.addWidget(self.gff_path_label, 1)
+        gff_path_row.addWidget(self.gff_browse_btn)
+        gg.addLayout(gff_path_row)
+
+        gff_btn_row = QHBoxLayout()
+        self.gff_load_btn = QPushButton("Load Annotation")
+        self.gff_load_btn.setEnabled(False)
+        self.gff_load_btn.clicked.connect(self._load_gff)
+        self.gff_clear_btn = QPushButton("Clear")
+        self.gff_clear_btn.setVisible(False)
+        self.gff_clear_btn.clicked.connect(self._clear_gff)
+        gff_btn_row.addWidget(self.gff_load_btn)
+        gff_btn_row.addWidget(self.gff_clear_btn)
+        gff_btn_row.addStretch()
+        gg.addLayout(gff_btn_row)
+
+        self.gff_status = QLabel("")
+        self.gff_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        gg.addWidget(self.gff_status)
+        L.addWidget(gff_group)
 
         # ── Genome summary ────────────────────────────────
         self.summary_group = QGroupBox("Genome Summary")
@@ -254,6 +288,46 @@ class HomePanel(QWidget):
         self.mw.set_status("Failed to load genome")
 
     # ---------------------------------------------------------
+    # GFF LOAD
+    # ---------------------------------------------------------
+    def _browse_gff(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select annotation file", "",
+            "Annotation files (*.gff *.gff3 *.gtf);;All files (*)"
+        )
+        if path:
+            self._selected_gff_path = path
+            self.gff_path_label.setText(path)
+            self.gff_path_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {FONT_SIZE_SMALL}pt;")
+            self.gff_load_btn.setEnabled(True)
+
+    def _load_gff(self):
+        if not self._selected_gff_path:
+            return
+        try:
+            self.state.clear_gff()
+            self.state.gff_path     = self._selected_gff_path
+            self.state.gff_filename = os.path.basename(self._selected_gff_path)
+            # gff_features built lazily when first needed
+            self.gff_status.setText(f"✓ Annotation loaded — {self.state.gff_filename}")
+            self.gff_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
+            self.gff_clear_btn.setVisible(True)
+            self.mw.set_status(f"Annotation loaded — {self.state.gff_filename}")
+        except Exception as e:
+            self.gff_status.setText(f"Error: {e}")
+            self.gff_status.setStyleSheet(f"color: {ERROR}; font-size: {FONT_SIZE_SMALL}pt;")
+
+    def _clear_gff(self):
+        self.state.clear_gff()
+        self._selected_gff_path = None
+        self.gff_path_label.setText("No annotation file loaded")
+        self.gff_path_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        self.gff_load_btn.setEnabled(False)
+        self.gff_clear_btn.setVisible(False)
+        self.gff_status.setText("")
+        self.mw.set_status("Annotation cleared")
+
+    # ---------------------------------------------------------
     # SESSION SAVE / RESTORE
     # ---------------------------------------------------------
     def _save_session(self):
@@ -270,7 +344,7 @@ class HomePanel(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(_state_to_dict(self.state), f, default=str, indent=2)
             self._set_session_status(f"Session saved to {path}", SUCCESS)
-            self.mw.set_status(f"Session saved")
+            self.mw.set_status("Session saved")
         except Exception as e:
             self._set_session_status(f"Failed to save: {e}", ERROR)
 
@@ -288,15 +362,14 @@ class HomePanel(QWidget):
                 payload = json.load(f)
             _dict_to_state(self.state, payload)
             parts = []
-            if self.state.ssrs:             parts.append(f"{len(self.state.ssrs):,} SSRs")
-            if self.state.primer_results:   parts.append(f"{len(self.state.primer_results):,} primer pairs")
+            if self.state.ssrs:                parts.append(f"{len(self.state.ssrs):,} SSRs")
+            if self.state.primer_results:      parts.append(f"{len(self.state.primer_results):,} primer pairs")
             if self.state.specificity_results: parts.append(f"{len(self.state.specificity_results):,} specificity results")
             summary = ", ".join(parts) if parts else "no result data"
             self._set_session_status(f"Session restored — {summary}", SUCCESS)
-            # Update sidebar step indicators
-            if self.state.has_genome:    self.mw.on_step_complete(0)
-            if self.state.has_ssrs:      self.mw.on_step_complete(1)
-            if self.state.has_primers:   self.mw.on_step_complete(2)
+            if self.state.has_genome:      self.mw.on_step_complete(0)
+            if self.state.has_ssrs:        self.mw.on_step_complete(1)
+            if self.state.has_primers:     self.mw.on_step_complete(2)
             if self.state.has_specificity: self.mw.on_step_complete(3)
             self.mw.refresh_sidebar()
             self.mw.set_status("Session restored")
@@ -318,12 +391,19 @@ class HomePanel(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.state.clear_downstream_of_genome()
+            self.state.clear_gff()
             self.state.genome = self.state.genome_path = self.state.genome_filename = None
-            self._selected_path = None
+            self._selected_path     = None
+            self._selected_gff_path = None
             self.path_label.setText("No file selected")
             self.path_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+            self.gff_path_label.setText("No annotation file loaded")
+            self.gff_path_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
             self.load_btn.setEnabled(False)
+            self.gff_load_btn.setEnabled(False)
+            self.gff_clear_btn.setVisible(False)
             self.load_status.setText("")
+            self.gff_status.setText("")
             self.mw.set_status("Reset")
             self.mw.refresh_sidebar()
             self._refresh()
@@ -336,7 +416,11 @@ class HomePanel(QWidget):
         self.summary_group.setVisible(has)
         self.reset_btn.setVisible(has)
 
-
+        # Restore GFF status if session was restored with a GFF path
+        if self.state.has_gff and not self.gff_status.text():
+            self.gff_status.setText(f"✓ Annotation loaded — {self.state.gff_filename}")
+            self.gff_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
+            self.gff_clear_btn.setVisible(True)
 
         if has:
             genome   = self.state.genome
@@ -345,11 +429,12 @@ class HomePanel(QWidget):
                 item = self.summary_layout.takeAt(0)
                 if item.widget(): item.widget().deleteLater()
             metrics = [
-                ("File",              self.state.genome_filename or "—"),
-                ("Contigs",           f"{len(genome):,}"),
-                ("Total length",      f"{total_bp:,} bp"),
-                ("Shortest contig",   f"{min(len(s) for s in genome.values()):,} bp"),
-                ("Longest contig",    f"{max(len(s) for s in genome.values()):,} bp"),
+                ("File",            self.state.genome_filename or "—"),
+                ("Contigs",         f"{len(genome):,}"),
+                ("Total length",    f"{total_bp:,} bp"),
+                ("Shortest contig", f"{min(len(s) for s in genome.values()):,} bp"),
+                ("Longest contig",  f"{max(len(s) for s in genome.values()):,} bp"),
+                ("Annotation",      self.state.gff_filename or "None loaded"),
             ]
             for row, (label, value) in enumerate(metrics):
                 lbl = QLabel(label)
