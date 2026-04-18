@@ -15,7 +15,7 @@ Performance note:
     initialisation in the spawned process. primer3 is a C extension and runs
     fast enough in a single QThread for all practical SSR dataset sizes.
 
-GBS mode:
+amplicon mode:
     Genotype-by-sequencing mode uses shorter flanks and smaller product sizes
     to ensure amplicons fit within Illumina read lengths. Primers are tailed
     with standard Illumina adapter sequences for direct use in amplicon
@@ -91,10 +91,10 @@ RELAXED_PRESET = {
     "PRIMER_DNA_CONC": 50.0,
 }
 
-# GBS preset — optimised for Illumina amplicon sequencing
+# amplicon preset — optimised for Illumina amplicon sequencing
 # Short flanks + small products ensure amplicons fit within 300bp paired-end reads.
 # Slightly stricter Tm range for consistent multiplexed PCR.
-GBS_PRESET = {
+amplicon_PRESET = {
     "PRIMER_MIN_SIZE": 18,
     "PRIMER_OPT_SIZE": 20,
     "PRIMER_MAX_SIZE": 24,
@@ -118,11 +118,11 @@ PRESETS = {
     "strict":      STRICT_PRESET,
     "recommended": RECOMMENDED_PRESET,
     "relaxed":     RELAXED_PRESET,
-    "gbs":         GBS_PRESET,
+    "amplicon":         amplicon_PRESET,
 }
 
-# Default parameters for GBS mode
-GBS_DEFAULTS = {
+# Default parameters for amplicon mode
+amplicon_DEFAULTS = {
     "flank":            50,     # short flanks to keep product small
     "product_min":      80,
     "product_max":      200,    # must fit in Illumina 300bp paired-end
@@ -245,7 +245,7 @@ def _flank_is_usable(template: str, target_start: int, target_len: int,
 
 def _design_one(ssr, template, left_bound, target_start, target_len,
                 product_size_range, opts, num_pairs,
-                gbs_mode=False, add_adapters=False):
+                amplicon_mode=False, add_adapters=False):
     """Design primers for a single SSR. Returns (success_list, failed_list)."""
 
     primer3_input = {
@@ -270,10 +270,10 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
         left_seq  = result[left_key]
         right_seq = result[f"PRIMER_RIGHT_{rank}_SEQUENCE"]
 
-        # Add Illumina adapter tails in GBS mode
+        # Add Illumina adapter tails in amplicon mode
         left_seq_with_tail  = left_seq
         right_seq_with_tail = right_seq
-        if gbs_mode and add_adapters:
+        if amplicon_mode and add_adapters:
             left_seq_with_tail  = ILLUMINA_TAILS["forward"] + left_seq
             right_seq_with_tail = ILLUMINA_TAILS["reverse"] + right_seq
 
@@ -295,11 +295,11 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
             "right_tm":        calc_tm(right_seq),
             "left_3end_dg":    calc_3prime_dg(left_seq),
             "right_3end_dg":   calc_3prime_dg(right_seq),
-            "gbs_mode":        gbs_mode,
+            "amplicon_mode":        amplicon_mode,
         }
 
-        # Store tailed sequences separately if GBS mode with adapters
-        if gbs_mode and add_adapters:
+        # Store tailed sequences separately if amplicon mode with adapters
+        if amplicon_mode and add_adapters:
             rec["left_primer_tailed"]  = left_seq_with_tail
             rec["right_primer_tailed"] = right_seq_with_tail
 
@@ -325,7 +325,7 @@ def design_primers_for_all_ssrs(
     primer_opts=None,
     num_pairs=1,
     progress_callback=None,
-    gbs_mode=False,
+    amplicon_mode=False,
     add_adapters=False,
 ):
     """
@@ -341,13 +341,13 @@ def design_primers_for_all_ssrs(
         ssr_list: list of SSR dicts
         flank: bp of flanking sequence on each side of the SSR
         product_size_range: (min, max) tuple for amplicon size
-        preset: one of "strict", "recommended", "relaxed", "gbs"
+        preset: one of "strict", "recommended", "relaxed", "amplicon"
         primer_opts: dict of primer3 parameter overrides
         num_pairs: number of primer pairs to return per SSR (1–5)
         progress_callback: optional callable(done, total)
-        gbs_mode: if True, applies GBS-specific design logic and adds
+        amplicon_mode: if True, applies amplicon-specific design logic and adds
                   SEQUENCE_EXCLUDED_REGION to keep primers out of the repeat
-        add_adapters: if True (GBS mode only), appends Illumina M13 tails
+        add_adapters: if True (amplicon mode only), appends Illumina M13 tails
                       to primer sequences for direct use in amplicon sequencing
 
     Returns:
@@ -402,7 +402,7 @@ def design_primers_for_all_ssrs(
             ssr, template, left_bound,
             target_start, target_len,
             product_size_range, opts, num_pairs,
-            gbs_mode=gbs_mode,
+            amplicon_mode=amplicon_mode,
             add_adapters=add_adapters,
         )
         success.extend(s)
@@ -431,9 +431,9 @@ def primers_to_blast_fasta(primer_results):
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def primers_to_gbs_fasta(primer_results):
+def primers_to_amplicon_fasta(primer_results):
     """
-    Export GBS primers with Illumina adapter tails if present.
+    Export amplicon primers with Illumina adapter tails if present.
     Falls back to bare sequences if tails were not added.
     For use in ordering primers for amplicon sequencing workflows.
     """

@@ -21,9 +21,7 @@ class AppState:
     gff_path:        Optional[str]    = None   # path to GFF/GTF file on disk
     gff_filename:    Optional[str]    = None
     gff_features:    Optional[object] = None   # parsed GFFIndex (built lazily)
-    # Maps contig accession → chromosome display name, e.g. "CP007106.1" → "2L"
-    # Populated after GFF is parsed. Empty dict if no GFF or no chrom info in GFF.
-    chrom_names:     Optional[dict]   = None
+    chrom_names:     Optional[dict]   = None   # contig accession → chromosome display name
 
     # ── SSR Detection ─────────────────────────────────────
     ssrs:               Optional[list]  = None  # list of SSR dicts
@@ -35,7 +33,9 @@ class AppState:
     filtered_primer_results: Optional[list] = None  # after quality filters
     product_min:             int  = 100
     product_max:             int  = 250
-    gbs_mode:                bool = False
+
+    # Workflow mode: "capillary", "amplicon", or "gbs_re" (future)
+    workflow_mode:           str  = "capillary"
 
     # ── Specificity ───────────────────────────────────────
     specificity_results: Optional[list] = None
@@ -70,7 +70,6 @@ class AppState:
         self.primer_results          = None
         self.filtered_primer_results = None
         self.primer_version          = 0
-        self.gbs_mode                = False
         self.clear_downstream_of_primers()
 
     def clear_downstream_of_primers(self):

@@ -128,16 +128,14 @@ class SSRPanel(QWidget):
 
         lbl_motif = QLabel("Motif lengths")
         lbl_motif.setToolTip(
-            "Select which repeat unit sizes to search for.\n"
-            "Di- (2bp) and tri- (3bp) nucleotide repeats are most informative\n"
-            "for population genetics and marker development."
+            "Select which repeat unit sizes to search for."
         )
         sg.addWidget(lbl_motif, 0, 0)
         motif_row = QHBoxLayout()
         self.motif_checks = {}
         for k in [2, 3, 4, 5, 6]:
             cb = QCheckBox(f"{k}-mer")
-            cb.setChecked(k in [2, 3])
+            cb.setChecked(k in [3, 4])
             cb.stateChanged.connect(self._update_repeat_visibility)
             self.motif_checks[k] = cb
             motif_row.addWidget(cb)
@@ -147,13 +145,12 @@ class SSRPanel(QWidget):
 
         lbl_contig = QLabel("Min contig length (bp)")
         lbl_contig.setToolTip(
-            "Skip contigs shorter than this length.\n"
-            "Contigs under ~300bp cannot yield usable SSR markers."
+            "Skip contigs shorter than this length."
         )
         sg.addWidget(lbl_contig, 1, 0)
         self.min_contig = QSpinBox()
         self.min_contig.setRange(0, 100000)
-        self.min_contig.setValue(300)
+        self.min_contig.setValue(50)
         self.min_contig.setSingleStep(50)
         sg.addWidget(self.min_contig, 1, 1)
 
@@ -178,8 +175,7 @@ class SSRPanel(QWidget):
         self.excl_homo = QCheckBox("Exclude homopolymers")
         self.excl_homo.setChecked(True)
         self.excl_homo.setToolTip(
-            "Exclude single-nucleotide runs (e.g. AAAAAAA).\n"
-            "Homopolymers are uninformative as genetic markers."
+            "Exclude single-nucleotide runs (e.g. AAAAAAA)."
         )
         self.search_rev = QCheckBox("Search reverse complement strand")
         self.search_rev.setChecked(False)

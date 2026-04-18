@@ -266,9 +266,13 @@ class SpecificityPanel(QWidget):
         self._worker.start()
 
     def _on_done(self, results):
+        print(f"DEBUG BLAST: got {len(results)} results")
         self.state.specificity_results = results
-        self.state.blast_raw_rows      = _flatten_blast_hits(results)
-        self.state.blast_version      += 1
+        print(f"DEBUG BLAST: state.specificity_results len = {len(self.state.specificity_results)}")
+        self.state.blast_raw_rows = _flatten_blast_hits(results)
+        self.state.blast_version += 1
+        print(f"DEBUG BLAST: calling mw.refresh_sidebar")
+        self.mw.refresh_sidebar()
 
         n_pass = sum(1 for r in results if r.get("specificity_status") == "PASS")
         n_fail = len(results) - n_pass

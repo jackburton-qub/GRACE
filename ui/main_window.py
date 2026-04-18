@@ -28,16 +28,22 @@ from ui.panels.primer_panel      import PrimerPanel
 from ui.panels.specificity_panel import SpecificityPanel
 from ui.panels.results_panel     import ResultsPanel
 from ui.panels.report_panel      import ReportPanel
+from ui.panels.amplicon_panel    import AmpliconPanel
+from ui.panels.capillary_panel   import CapillaryPanel
+from ui.panels.gbs_re_panel      import GBSREPanel
 
 
 STEPS = [
-    (0, "01  Load Genome"),
-    (1, "02  Detect SSRs"),
-    (2, "03  SSR Summary"),
-    (3, "04  Design Primers"),
-    (4, "05  Check Specificity"),
-    (5, "06  BLAST Results"),
-    (6, "07  Final Report"),
+    (0,  "01  Load Genome"),
+    (1,  "02  Detect SSRs"),
+    (2,  "03  SSR Summary"),
+    (3,  "04  Design Primers"),
+    (4,  "05  Check Specificity"),
+    (5,  "06  BLAST Results"),
+    (6,  "07  Final Report"),
+    (7,  "08  Amplicon Tools"),
+    (8,  "09  Capillary Tools"),
+    (9,  "10  GBS‑RE Tools"),
 ]
 
 
@@ -46,16 +52,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state
         self.setWindowTitle("GRACE — Genomic Repeat Analysis and Characterisation Engine")
-        self.setMinimumSize(WINDOW_MIN_W, WINDOW_MIN_H)
+        # Increased minimum height to accommodate 10 sidebar items
+        self.setMinimumSize(WINDOW_MIN_W, max(WINDOW_MIN_H, 800))
         self.setStyleSheet(STYLESHEET)
-
         self._build_ui()
         self._connect_signals()
         self.refresh_sidebar()
 
-    # ---------------------------------------------------------
-    # UI BUILD
-    # ---------------------------------------------------------
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -66,33 +69,33 @@ class MainWindow(QMainWindow):
         # ── Sidebar ──────────────────────────────────────
         sidebar_container = QWidget()
         sidebar_container.setFixedWidth(SIDEBAR_WIDTH)
-        sidebar_container.setStyleSheet(f"background-color: {BG_MID}; border-right: 1px solid {BORDER};")
+        sidebar_container.setStyleSheet(
+            f"background-color: {BG_MID}; border-right: 1px solid {BORDER};"
+        )
         sidebar_layout = QVBoxLayout(sidebar_container)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
 
-        # App name header in sidebar
         header = QWidget()
         header.setFixedHeight(64)
-        header.setStyleSheet(f"background-color: {BG_MID}; border-bottom: 1px solid {BORDER}; padding: 0;")
+        header.setStyleSheet(
+            f"background-color: {BG_MID}; border-bottom: 1px solid {BORDER}; padding: 0;"
+        )
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(16, 12, 16, 12)
         header_layout.setSpacing(2)
 
         title_label = QLabel("GRACE")
-        title_font = QFont(FONT_UI, 13, QFont.Weight.Bold)
-        title_label.setFont(title_font)
+        title_label.setFont(QFont(FONT_UI, 13, QFont.Weight.Bold))
         title_label.setStyleSheet(f"color: {ACCENT};")
 
         sub_label = QLabel("Genomic Repeat Analysis")
-        sub_font = QFont(FONT_MONO, 7)
-        sub_label.setFont(sub_font)
+        sub_label.setFont(QFont(FONT_MONO, 7))
         sub_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
 
         header_layout.addWidget(title_label)
         header_layout.addWidget(sub_label)
 
-        # Step list
         self.sidebar = QListWidget()
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -100,9 +103,8 @@ class MainWindow(QMainWindow):
 
         for _, label in STEPS:
             item = QListWidgetItem(label)
-            item.setSizeHint(QSize(SIDEBAR_WIDTH, 52))
-            font = QFont(FONT_UI, FONT_SIZE_NORMAL)
-            item.setFont(font)
+            item.setSizeHint(QSize(SIDEBAR_WIDTH, 48))
+            item.setFont(QFont(FONT_UI, FONT_SIZE_NORMAL))
             self.sidebar.addItem(item)
 
         # Font size selector
@@ -134,24 +136,17 @@ class MainWindow(QMainWindow):
             btn = QRadioButton(preset)
             btn.setStyleSheet(f"""
                 QRadioButton {{
-                    color: {TEXT_SECONDARY};
-                    font-size: 8pt;
-                    spacing: 4px;
-                    border: none;
-                    background: transparent;
+                    color: {TEXT_SECONDARY}; font-size: 8pt;
+                    spacing: 4px; border: none; background: transparent;
                 }}
-                QRadioButton:checked {{
-                    color: {ACCENT};
-                }}
+                QRadioButton:checked {{ color: {ACCENT}; }}
                 QRadioButton::indicator {{
                     width: 10px; height: 10px;
-                    border: 1px solid {MUTED};
-                    border-radius: 5px;
+                    border: 1px solid {MUTED}; border-radius: 5px;
                     background: transparent;
                 }}
                 QRadioButton::indicator:checked {{
-                    background: {ACCENT};
-                    border-color: {ACCENT};
+                    background: {ACCENT}; border-color: {ACCENT};
                 }}
             """)
             if preset == FONT_SIZE_PRESET_DEFAULT:
@@ -161,7 +156,6 @@ class MainWindow(QMainWindow):
 
         font_size_layout.addWidget(btn_row)
 
-        # Version label at bottom of sidebar
         version_label = QLabel("v1.0.0")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_label.setStyleSheet(f"color: {MUTED}; font-size: 7pt; padding: 8px;")
@@ -182,26 +176,25 @@ class MainWindow(QMainWindow):
         self.specificity_panel = SpecificityPanel(self.state, self)
         self.results_panel     = ResultsPanel(self.state, self)
         self.report_panel      = ReportPanel(self.state, self)
+        self.amplicon_panel    = AmpliconPanel(self.state, self)
+        self.capillary_panel   = CapillaryPanel(self.state, self)
+        self.gbs_re_panel      = GBSREPanel(self.state, self)
 
-        self.stack.addWidget(self.home_panel)
-        self.stack.addWidget(self.ssr_panel)
-        self.stack.addWidget(self.ssr_summary_panel)
-        self.stack.addWidget(self.primer_panel)
-        self.stack.addWidget(self.specificity_panel)
-        self.stack.addWidget(self.results_panel)
-        self.stack.addWidget(self.report_panel)
+        for panel in [
+            self.home_panel, self.ssr_panel, self.ssr_summary_panel,
+            self.primer_panel, self.specificity_panel, self.results_panel,
+            self.report_panel, self.amplicon_panel, self.capillary_panel,
+            self.gbs_re_panel,
+        ]:
+            self.stack.addWidget(panel)
 
         root.addWidget(sidebar_container)
         root.addWidget(self.stack, 1)
 
-        # ── Status bar ───────────────────────────────────
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
 
-    # ---------------------------------------------------------
-    # SIGNALS
-    # ---------------------------------------------------------
     def _connect_signals(self):
         self.sidebar.currentRowChanged.connect(self._on_tab_changed)
         self.sidebar.setCurrentRow(0)
@@ -220,16 +213,16 @@ class MainWindow(QMainWindow):
         self._font_preset = preset
         self.setStyleSheet(build_stylesheet(preset))
 
-    # ---------------------------------------------------------
-    # PUBLIC API — called by panels to update UI
-    # ---------------------------------------------------------
     def set_status(self, message: str):
         self.status_bar.showMessage(message)
 
     def refresh_sidebar(self):
-        """Update sidebar item colours to reflect current data state."""
         from PyQt6.QtGui import QColor
         s = self.state
+        mode = s.workflow_mode
+
+        is_amplicon = (mode == "amplicon")
+        is_capillary = (mode == "capillary")
 
         statuses = [
             s.has_genome,       # 0 Load Genome
@@ -239,14 +232,24 @@ class MainWindow(QMainWindow):
             s.has_specificity,  # 4 Check Specificity
             s.has_specificity,  # 5 BLAST Results
             s.has_specificity,  # 6 Final Report
+            s.has_specificity and is_amplicon,   # 7 Amplicon Tools
+            s.has_specificity and is_capillary,  # 8 Capillary Tools
+            s.has_genome and s.has_ssrs,         # 9 GBS‑RE Tools
         ]
 
         for i, (_, label) in enumerate(STEPS):
             item = self.sidebar.item(i)
+            if item is None:
+                continue
             is_current = self.sidebar.currentRow() == i
             done = statuses[i]
 
-            if done:
+            # Dim inactive tool steps
+            if i == 7 and not is_amplicon:
+                item.setForeground(QColor(MUTED))
+            elif i == 8 and not is_capillary:
+                item.setForeground(QColor(MUTED))
+            elif done:
                 item.setForeground(QColor(SUCCESS))
             elif is_current:
                 item.setForeground(QColor(ACCENT))
@@ -254,10 +257,8 @@ class MainWindow(QMainWindow):
                 item.setForeground(QColor(TEXT_SECONDARY))
 
     def navigate_to(self, step: int):
-        """Navigate to a specific step (0-indexed)."""
         self.sidebar.setCurrentRow(step)
 
     def on_step_complete(self, step: int):
-        """Called by panels when a step completes — refreshes sidebar."""
         self.refresh_sidebar()
         self.set_status(f"Step {step + 1} complete")
