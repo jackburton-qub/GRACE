@@ -94,6 +94,25 @@ class GBFFLoadWorker(QThread):
             self.error.emit(str(e))
 
 
+class GFFLoadWorker(QThread):
+    """Loads and parses a GFF3/GTF file into a GFFIndex."""
+    finished = pyqtSignal(object, str)   # gff_index, path
+    error    = pyqtSignal(str)
+
+    def __init__(self, path, genome):
+        super().__init__()
+        self.path = path
+        self.genome = genome
+
+    def run(self):
+        try:
+            from core.gff_parser import build_gff_index
+            gff_index = build_gff_index(self.path, genome=self.genome)
+            self.finished.emit(gff_index, self.path)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------
@@ -104,6 +123,7 @@ class HomePanel(QWidget):
         self.state   = state
         self.mw      = main_window
         self._worker            = None
+        self._gff_worker        = None
         self._selected_path     = None
         self._selected_gff_path = None
         self._build_ui()
@@ -205,6 +225,25 @@ class HomePanel(QWidget):
         gff_path_row.addWidget(self.gff_path_label, 1)
         gff_path_row.addWidget(self.gff_browse_btn)
         gg.addLayout(gff_path_row)
+
+        # GFF file mismatch warning
+        self._gff_mismatch_warning = QLabel(
+            "⚠️ <b>Important: Matching Sequence and Annotation Files</b><br>"
+            "The contig identifiers in your sequence file must match those in your "
+            "annotation file for chromosome names and genomic features to be displayed "
+            "correctly. Using mismatched files is a common source of confusion.<br><br>"
+            "For best results, always download the sequence and annotation files together "
+            "from the same assembly version. If you are using NCBI data, we recommend "
+            "using the <b>RefSeq assembly</b> (accession starting with 'GCF_') for complete "
+            "compatibility."
+        )
+        self._gff_mismatch_warning.setStyleSheet(
+            f"background-color: {WARNING}22; color: {WARNING}; padding: 12px; "
+            "border-radius: 4px; margin-top: 8px;"
+        )
+        self._gff_mismatch_warning.setWordWrap(True)
+        self._gff_mismatch_warning.setVisible(True)  # always show as helpful reminder
+        gg.addWidget(self._gff_mismatch_warning)
 
         gff_btn_row = QHBoxLayout()
         self.gff_load_btn = QPushButton("Load Annotation")
@@ -435,17 +474,44 @@ class HomePanel(QWidget):
     def _load_gff(self):
         if not self._selected_gff_path:
             return
-        try:
-            self.state.clear_gff()
-            self.state.gff_path     = self._selected_gff_path
-            self.state.gff_filename = os.path.basename(self._selected_gff_path)
-            self.gff_status.setText(f"✓ Annotation loaded — {self.state.gff_filename}")
-            self.gff_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
-            self.gff_clear_btn.setVisible(True)
-            self.mw.set_status(f"Annotation loaded — {self.state.gff_filename}")
-        except Exception as e:
-            self.gff_status.setText(f"Error: {e}")
-            self.gff_status.setStyleSheet(f"color: {ERROR}; font-size: {FONT_SIZE_SMALL}pt;")
+        if not self.state.has_genome:
+            self.gff_status.setText("Load a genome first before loading annotation")
+            self.gff_status.setStyleSheet(f"color: {WARNING}; font-size: {FONT_SIZE_SMALL}pt;")
+            return
+
+        self.gff_load_btn.setEnabled(False)
+        self.gff_status.setText("Parsing annotation file...")
+        self.gff_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        self.mw.set_status("Loading annotation...")
+
+        self._gff_worker = GFFLoadWorker(self._selected_gff_path, self.state.genome)
+        self._gff_worker.finished.connect(self._on_gff_load_done)
+        self._gff_worker.error.connect(self._on_gff_load_error)
+        self._gff_worker.start()
+
+    def _on_gff_load_done(self, gff_index, path):
+        self.state.clear_gff()
+        self.state.gff_path     = path
+        self.state.gff_filename = os.path.basename(path)
+        self.state.gff_features = gff_index
+        self.state.chrom_names  = dict(gff_index.chrom_names) if gff_index else {}
+
+        n_chrom = len(self.state.chrom_names)
+        self.gff_status.setText(
+            f"✓ Annotation loaded — {gff_index.n_features:,} features, "
+            f"{n_chrom:,} chromosome name{'s' if n_chrom != 1 else ''} mapped"
+        )
+        self.gff_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
+        self.gff_clear_btn.setVisible(True)
+        self.gff_load_btn.setEnabled(True)
+        self.mw.set_status(f"Annotation loaded — {self.state.gff_filename}")
+        self._refresh()
+
+    def _on_gff_load_error(self, msg):
+        self.gff_status.setText(f"Error: {msg}")
+        self.gff_status.setStyleSheet(f"color: {ERROR}; font-size: {FONT_SIZE_SMALL}pt;")
+        self.gff_load_btn.setEnabled(True)
+        self.mw.set_status("Failed to load annotation")
 
     def _clear_gff(self):
         self.state.clear_gff()
@@ -458,6 +524,7 @@ class HomePanel(QWidget):
         self.gff_clear_btn.setVisible(False)
         self.gff_status.setText("")
         self.mw.set_status("Annotation cleared")
+        self._refresh()
 
     # ---------------------------------------------------------
     # SESSION SAVE / RESTORE
@@ -555,7 +622,11 @@ class HomePanel(QWidget):
         self.reset_btn.setVisible(has)
 
         if self.state.has_gff and not self.gff_status.text():
-            self.gff_status.setText(f"✓ Annotation loaded — {self.state.gff_filename}")
+            n_chrom = len(self.state.chrom_names or {})
+            self.gff_status.setText(
+                f"✓ Annotation loaded — {self.state.gff_filename} "
+                f"({n_chrom:,} chromosome names mapped)"
+            )
             self.gff_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
             self.gff_clear_btn.setVisible(True)
 

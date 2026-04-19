@@ -1,7 +1,7 @@
 """
 amplicon_panel.py — Amplicon Sequencing Panel
 Validate multiplex compatibility and optimise your amplicon panel.
-Includes LD filter and chromosome view.
+Includes Chromosome column when GFF mapping is available.
 """
 
 import os
@@ -32,90 +32,8 @@ def _lbl(text, tip=None):
     return w
 
 
-class ChromosomeView(QWidget):
-    """Visualize marker positions across contigs."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._markers = []
-        self._filtered_markers = []
-        self._show_filtered = False
-        self._contig_lengths = {}
-        self.setMinimumHeight(200)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_data(self, all_markers, filtered_markers=None, contig_lengths=None):
-        self._markers = all_markers
-        self._filtered_markers = filtered_markers if filtered_markers is not None else []
-        self._contig_lengths = contig_lengths or {}
-        self.update()
-
-    def set_show_filtered(self, show):
-        self._show_filtered = show
-        self.update()
-
-    def paintEvent(self, event):
-        markers_to_show = self._filtered_markers if self._show_filtered else self._markers
-        if not markers_to_show:
-            painter = QPainter(self)
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No markers to display")
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        margin_left, margin_right, margin_top, margin_bottom = 100, 20, 20, 30
-
-        by_contig = {}
-        for m in markers_to_show:
-            contig = m.get("contig", "")
-            if contig not in by_contig:
-                by_contig[contig] = []
-            by_contig[contig].append(m)
-
-        contigs = list(by_contig.keys())
-        contig_lengths = {}
-        for contig in contigs:
-            if contig in self._contig_lengths:
-                contig_lengths[contig] = self._contig_lengths[contig]
-            else:
-                max_pos = max(m.get("start", 0) for m in by_contig[contig])
-                contig_lengths[contig] = max_pos + 1000
-
-        contigs = sorted(contigs, key=lambda c: contig_lengths.get(c, 0), reverse=True)[:8]
-        n_contigs = len(contigs)
-        row_height = (h - margin_top - margin_bottom) / max(n_contigs, 1)
-        bar_height = row_height * 0.6
-
-        painter.setPen(QPen(QColor(TEXT_SECONDARY), 1))
-        painter.setFont(QFont(FONT_MONO, 8))
-
-        for i, contig in enumerate(contigs):
-            y = margin_top + i * row_height + (row_height - bar_height) / 2
-            contig_len = contig_lengths[contig]
-
-            painter.drawText(5, int(y + bar_height/2 + 4), contig[:15])
-
-            bar_x = margin_left
-            bar_w = w - margin_left - margin_right
-            painter.setBrush(QBrush(QColor(BG_MID)))
-            painter.setPen(QPen(QColor(BORDER), 1))
-            painter.drawRect(bar_x, int(y), int(bar_w), int(bar_height))
-
-            painter.setBrush(QBrush(QColor(ACCENT)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            for m in by_contig[contig]:
-                pos = m.get("start", 0)
-                if contig_len > 0:
-                    rel_x = bar_x + (pos / contig_len) * bar_w
-                    painter.drawEllipse(QPointF(rel_x, y + bar_height/2), 3, 3)
-
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.drawText(bar_x, int(y + bar_height + 12), "0")
-            painter.drawText(bar_x + bar_w - 30, int(y + bar_height + 12), f"{contig_len/1000:.1f} kb")
-
-
 class HistogramWidget(QWidget):
+    """Clean histogram for amplicon size distribution."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self._sizes = []
@@ -163,7 +81,7 @@ class HistogramWidget(QWidget):
                         if sz == max_sz:
                             counts[-1] += 1
 
-        max_count = max(counts) if counts else 1
+        max_count = max(counts) if len(counts) > 0 else 1
         bin_width = chart_w / len(counts)
 
         painter.setPen(QPen(QColor(TEXT_SECONDARY), 1))
@@ -192,6 +110,7 @@ class HistogramWidget(QWidget):
 
 
 class CollapsibleBox(QWidget):
+    """A collapsible section with a toggle button."""
     def __init__(self, title="", parent=None):
         super().__init__(parent)
         self._is_expanded = False
@@ -302,14 +221,7 @@ class AmpliconPanel(QWidget):
         self._last_version = -1
         self._pass_primers = []
         self._validation_result = None
-        self._all_markers = []
-        self._contig_lengths = {}
         self._build_ui()
-        self._compute_contig_lengths()
-
-    def _compute_contig_lengths(self):
-        if self.state.genome:
-            self._contig_lengths = {c: len(s) for c, s in self.state.genome.items()}
 
     def _on_tag_preset_changed(self, preset: str):
         presets = {
@@ -346,6 +258,7 @@ class AmpliconPanel(QWidget):
         L.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
         L.setSpacing(16)
 
+        # Title
         title = QLabel("Amplicon Panel Validation")
         title.setFont(QFont(FONT_UI, FONT_SIZE_LARGE + 2, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {ACCENT};")
@@ -354,6 +267,7 @@ class AmpliconPanel(QWidget):
         L.addWidget(title)
         L.addWidget(sub)
 
+        # Placeholder
         self._placeholder = QLabel(
             "Amplicon Tools are only available when primers were designed in Amplicon Sequencing mode.\n"
             "Go to Primer Design, select 'Amplicon Sequencing', and run primer design first."
@@ -362,10 +276,12 @@ class AmpliconPanel(QWidget):
         self._placeholder.setWordWrap(True)
         L.addWidget(self._placeholder)
 
+        # ── Main Configuration ─────────────────────────────
         self._main_group = QGroupBox("Configuration")
         self._main_group.setVisible(False)
         mg = QVBoxLayout(self._main_group)
 
+        # Platform selector
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("Sequencing Platform:"))
         self._platform_combo = QComboBox()
@@ -376,6 +292,7 @@ class AmpliconPanel(QWidget):
         row1.addStretch()
         mg.addLayout(row1)
 
+        # Amplicon size limits
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("Min amplicon (bp):"))
         self._min_amp_spin = QSpinBox()
@@ -395,6 +312,7 @@ class AmpliconPanel(QWidget):
         row2.addStretch()
         mg.addLayout(row2)
 
+        # Adapter tag preset selector
         row3a = QHBoxLayout()
         row3a.addWidget(QLabel("Adapter tag preset:"))
         self._tag_preset_combo = QComboBox()
@@ -404,6 +322,7 @@ class AmpliconPanel(QWidget):
         row3a.addStretch()
         mg.addLayout(row3a)
 
+        # Adapter tags
         row3b = QHBoxLayout()
         self._include_tags_dimer_cb = QCheckBox("Include adapter tags in dimer analysis?")
         self._include_tags_dimer_cb.setChecked(False)
@@ -428,6 +347,7 @@ class AmpliconPanel(QWidget):
         row3b.addWidget(self._rev_tag_edit)
         mg.addLayout(row3b)
 
+        # Action buttons
         btn_layout = QHBoxLayout()
         self._validate_btn = QPushButton("Validate Panel")
         self._validate_btn.setObjectName("primary")
@@ -446,6 +366,7 @@ class AmpliconPanel(QWidget):
         self._status_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         mg.addWidget(self._status_label)
 
+        # Advanced parameters (collapsible)
         self._advanced_box = CollapsibleBox("Advanced Parameters")
         adv_widget = QWidget()
         adv_layout = QGridLayout(adv_widget)
@@ -477,6 +398,7 @@ class AmpliconPanel(QWidget):
         self._max_repeats_spin.setValue(45)
         adv_layout.addWidget(self._max_repeats_spin, 1, 3)
 
+        # LD filter
         self._ld_filter_cb = QCheckBox("Apply LD filter (thin markers by distance)")
         self._ld_filter_cb.setChecked(False)
         self._ld_filter_cb.toggled.connect(self._toggle_ld_filter)
@@ -495,21 +417,27 @@ class AmpliconPanel(QWidget):
 
         L.addWidget(self._main_group)
 
+        # Histogram (collapsible)
         self._histogram_box = CollapsibleBox("Amplicon Size Distribution")
         self._histogram_widget = HistogramWidget()
         self._histogram_box.addWidget(self._histogram_widget)
         L.addWidget(self._histogram_box)
 
+        # ── Results Summary ─────────────────────────────────
         self._tab_widget = QTabWidget()
         self._tab_widget.setVisible(False)
+        L.addWidget(self._tab_widget)
 
+        # Results Tab
         results_tab = QWidget()
         rt_layout = QVBoxLayout(results_tab)
+
         self._summary_label = QLabel("")
         self._summary_label.setWordWrap(True)
         self._summary_label.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         rt_layout.addWidget(self._summary_label)
 
+        # Cards
         cards_layout = QHBoxLayout()
         self._cards = {}
         for name, color in [("Total Loci", ACCENT), ("Passed", SUCCESS),
@@ -519,18 +447,22 @@ class AmpliconPanel(QWidget):
             self._cards[name] = card
         rt_layout.addLayout(cards_layout)
 
+        # Detailed issues (collapsible)
         self._issues_box = CollapsibleBox("Detailed Issues")
         issues_widget = QWidget()
         issues_layout = QVBoxLayout(issues_widget)
+
         self._dimer_table = self._create_issue_table("Dimer Risks")
         issues_layout.addWidget(self._dimer_table)
         self._size_filter_table = self._create_issue_table("Size Filtered Loci")
         issues_layout.addWidget(self._size_filter_table)
         self._gc_warning_table = self._create_issue_table("GC Content Warnings")
         issues_layout.addWidget(self._gc_warning_table)
+
         self._issues_box.addWidget(issues_widget)
         rt_layout.addWidget(self._issues_box)
 
+        # Clean pool table
         self._pool_table_label = QLabel("Clean Pool (Passed All Checks)")
         self._pool_table_label.setFont(QFont(FONT_UI, FONT_SIZE_NORMAL, QFont.Weight.Bold))
         self._pool_table_label.setStyleSheet(f"color: {ACCENT}; margin-top: 16px;")
@@ -543,21 +475,26 @@ class AmpliconPanel(QWidget):
         self._pool_table.setFixedHeight(300)
         rt_layout.addWidget(self._pool_table)
 
+        # Export buttons
         export_layout = QHBoxLayout()
         self._export_pool_btn = QPushButton("Export Pool (CSV)")
         self._export_pool_btn.clicked.connect(self._export_pool)
         export_layout.addWidget(self._export_pool_btn)
+
         self._export_fasta_btn = QPushButton("Export Amplicon Reference (FASTA)")
         self._export_fasta_btn.clicked.connect(self._export_amplicon_fasta)
         export_layout.addWidget(self._export_fasta_btn)
+
         self._export_gc_btn = QPushButton("Export GC Analysis (CSV)")
         self._export_gc_btn.clicked.connect(self._export_gc_analysis)
         export_layout.addWidget(self._export_gc_btn)
+
         export_layout.addStretch()
         rt_layout.addLayout(export_layout)
 
         self._tab_widget.addTab(results_tab, "Results")
 
+        # Chromosome View Tab
         chrom_tab = QWidget()
         ct_layout = QVBoxLayout(chrom_tab)
         self._chromosome_view = ChromosomeView()
@@ -571,9 +508,7 @@ class AmpliconPanel(QWidget):
         ct_layout.addLayout(chrom_controls)
         self._tab_widget.addTab(chrom_tab, "Chromosome View")
 
-        L.addWidget(self._tab_widget)
         L.addStretch()
-
         self._update_platform_limits()
 
     def _make_card(self, label, value, color):
@@ -615,6 +550,9 @@ class AmpliconPanel(QWidget):
         self._max_amp_spin.setValue(platform["max_amplicon"])
         self._platform_hint.setText(f"(Suggested: {platform['min_amplicon']}–{platform['max_amplicon']} bp)")
 
+    # ---------------------------------------------------------
+    # Validation
+    # ---------------------------------------------------------
     def _cancel_worker(self):
         if self._worker:
             self._worker.cancel()
@@ -660,6 +598,7 @@ class AmpliconPanel(QWidget):
 
     def _on_validation_done(self, result):
         self._validation_result = result
+        self.state.amplicon_validation_result = result
         self._validate_btn.setEnabled(True)
         self._cancel_btn.setEnabled(False)
         self._status_label.setText("Validation complete.")
@@ -688,13 +627,16 @@ class AmpliconPanel(QWidget):
         self._update_card("Dimer Risks", str(dimer_unique))
         self._update_card("Size Filtered", str(size_filtered_unique))
 
-        self._summary_label.setText(f"✅ {passed_unique} of {total_unique} loci passed all checks.")
+        summary = f"✅ {passed_unique} of {total_unique} loci passed all checks."
+        self._summary_label.setText(summary)
+
         self._populate_issue_tables(result)
         self._populate_pool_table(clean_pool)
 
         sizes = [p.get("product_size", 0) for p in clean_pool if p.get("product_size")]
         self._histogram_widget.set_data(sizes)
 
+        # Chromosome view data
         self._all_markers = []
         for p in self._pass_primers:
             self._all_markers.append({"contig": p.get("contig"), "start": p.get("start", 0)})
@@ -756,12 +698,16 @@ class AmpliconPanel(QWidget):
             lambda x: (x["ssr_id"], x["gc_percent"], x["flag"])
         )
 
+    # ---------------------------------------------------------
+    # Pool table and helpers
+    # ---------------------------------------------------------
     def _count_unique_loci(self, pool: list) -> int:
         if not pool:
             return 0
         return len({p.get("ssr_id") for p in pool if p.get("ssr_id") is not None})
 
     def _filter_unique_loci(self, pool: list) -> list:
+        """Keep only the best primer pair per SSR (lowest pair_rank)."""
         if not pool:
             return []
         import pandas as pd
@@ -788,19 +734,35 @@ class AmpliconPanel(QWidget):
             "left_primer": "Forward Primer",
             "right_primer": "Reverse Primer",
         }
+        # Add Chromosome column if mapping exists
+        show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+        if show_chromosome:
+            cols["chromosome"] = "Chromosome"
+
         display_cols = [c for c in cols if c in df.columns]
+        if show_chromosome and "chromosome" in display_cols and "contig" in display_cols:
+            display_cols.remove("chromosome")
+            contig_idx = display_cols.index("contig")
+            display_cols.insert(contig_idx + 1, "chromosome")
+
         self._pool_table.setSortingEnabled(False)
         self._pool_table.setRowCount(len(df))
         self._pool_table.setColumnCount(len(display_cols))
         self._pool_table.setHorizontalHeaderLabels([cols[c] for c in display_cols])
         for i, row in df.iterrows():
             for j, col in enumerate(display_cols):
-                val = row[col]
+                if col == "chromosome":
+                    val = self.state.get_display_name(row["contig"])
+                else:
+                    val = row[col]
                 text = f"{val:.2f}" if isinstance(val, float) else str(val)
                 self._pool_table.setItem(i, j, QTableWidgetItem(text))
         self._pool_table.resizeColumnsToContents()
         self._pool_table.setSortingEnabled(True)
 
+    # ---------------------------------------------------------
+    # Exports
+    # ---------------------------------------------------------
     def _export_pool(self):
         if not self._validation_result:
             return
@@ -812,7 +774,10 @@ class AmpliconPanel(QWidget):
         if not path:
             return
         import pandas as pd
-        pd.DataFrame(pool).to_csv(path, index=False)
+        df = pd.DataFrame(pool)
+        if hasattr(self.state, 'get_display_name'):
+            df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
+        df.to_csv(path, index=False)
         self.mw.set_status(f"Pool exported to {path}")
 
     def _export_amplicon_fasta(self):
@@ -867,11 +832,20 @@ class AmpliconPanel(QWidget):
         except Exception as e:
             self._status_label.setText(f"Export error: {e}")
 
+    # ---------------------------------------------------------
+    # Helpers
+    # ---------------------------------------------------------
     def _get_pass_primers(self):
         spec = self.state.specificity_results or []
         primers = self.state.primer_results or []
         pass_ids = {r["ssr_id"] for r in spec if r.get("specificity_status") == "PASS"}
         return [p for p in primers if p.get("ssr_id") in pass_ids]
+
+    def _compute_contig_lengths(self):
+        if self.state.genome:
+            self._contig_lengths = {c: len(s) for c, s in self.state.genome.items()}
+        else:
+            self._contig_lengths = {}
 
     def _rebuild(self):
         mode = self.state.workflow_mode
@@ -892,3 +866,86 @@ class AmpliconPanel(QWidget):
         if self.state.blast_version != self._last_version:
             self._last_version = self.state.blast_version
             self._rebuild()
+
+
+class ChromosomeView(QWidget):
+    """Visualize marker positions across contigs."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._markers = []
+        self._filtered_markers = []
+        self._show_filtered = False
+        self._contig_lengths = {}
+        self.setMinimumHeight(200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_data(self, all_markers, filtered_markers=None, contig_lengths=None):
+        self._markers = all_markers
+        self._filtered_markers = filtered_markers if filtered_markers is not None else []
+        self._contig_lengths = contig_lengths or {}
+        self.update()
+
+    def set_show_filtered(self, show):
+        self._show_filtered = show
+        self.update()
+
+    def paintEvent(self, event):
+        markers_to_show = self._filtered_markers if self._show_filtered else self._markers
+        if not markers_to_show:
+            painter = QPainter(self)
+            painter.setPen(QColor(TEXT_SECONDARY))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No markers to display")
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        margin_left, margin_right, margin_top, margin_bottom = 100, 20, 20, 30
+
+        by_contig = {}
+        for m in markers_to_show:
+            contig = m.get("contig", "")
+            if contig not in by_contig:
+                by_contig[contig] = []
+            by_contig[contig].append(m)
+
+        contigs = list(by_contig.keys())
+        contig_lengths = {}
+        for contig in contigs:
+            if contig in self._contig_lengths:
+                contig_lengths[contig] = self._contig_lengths[contig]
+            else:
+                max_pos = max(m.get("start", 0) for m in by_contig[contig])
+                contig_lengths[contig] = max_pos + 1000
+
+        contigs = sorted(contigs, key=lambda c: contig_lengths.get(c, 0), reverse=True)[:8]
+        n_contigs = len(contigs)
+        row_height = (h - margin_top - margin_bottom) / max(n_contigs, 1)
+        bar_height = row_height * 0.6
+
+        painter.setPen(QPen(QColor(TEXT_SECONDARY), 1))
+        painter.setFont(QFont(FONT_MONO, 8))
+
+        for i, contig in enumerate(contigs):
+            y = margin_top + i * row_height + (row_height - bar_height) / 2
+            contig_len = contig_lengths[contig]
+
+            painter.drawText(5, int(y + bar_height/2 + 4), contig[:15])
+
+            bar_x = margin_left
+            bar_w = w - margin_left - margin_right
+            painter.setBrush(QBrush(QColor(BG_MID)))
+            painter.setPen(QPen(QColor(BORDER), 1))
+            painter.drawRect(bar_x, int(y), int(bar_w), int(bar_height))
+
+            painter.setBrush(QBrush(QColor(ACCENT)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            for m in by_contig[contig]:
+                pos = m.get("start", 0)
+                if contig_len > 0:
+                    rel_x = bar_x + (pos / contig_len) * bar_w
+                    painter.drawEllipse(QPointF(rel_x, y + bar_height/2), 3, 3)
+
+            painter.setPen(QColor(TEXT_SECONDARY))
+            painter.drawText(bar_x, int(y + bar_height + 12), "0")
+            painter.drawText(bar_x + bar_w - 30, int(y + bar_height + 12), f"{contig_len/1000:.1f} kb")

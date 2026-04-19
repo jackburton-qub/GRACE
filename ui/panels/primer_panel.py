@@ -1,5 +1,6 @@
 """
 primer_panel.py — Primer Design
+Single scroll area. Clean layout. Filters appear after design.
 Supports Capillary Electrophoresis and Amplicon Sequencing modes.
 """
 import os, sys, time
@@ -86,7 +87,7 @@ class PrimerPanel(QWidget):
             )
             self.flank.setValue(100)
             self.product_min.setValue(100)
-            self.product_max.setValue(350)
+            self.product_max.setValue(250)
             self.tm_min.setValue(52.0)
             self.tm_opt.setValue(58.0)
             self.tm_max.setValue(60.0)
@@ -428,7 +429,6 @@ class PrimerPanel(QWidget):
         self.state.primer_results          = primers
         self.state.filtered_primer_results = primers
         self.state.primer_version         += 1
-        # Explicitly set workflow mode based on UI state
         self.state.workflow_mode           = "capillary" if not self._amplicon_mode else "amplicon"
 
         if primers:
@@ -554,22 +554,54 @@ class PrimerPanel(QWidget):
         metrics = f"{total:,} primer pairs designed | {len(primers):,} pass filters | {df['ssr_id'].nunique():,} SSRs covered"
         if truncated: metrics += f" | showing first {TABLE_DISPLAY_LIMIT:,}"
         self.metrics_label.setText(metrics)
-        COLS = {"ssr_id": "SSR ID", "pair_rank": "Pair", "contig": "Contig", "motif": "Motif",
-                "left_primer": "Forward", "right_primer": "Reverse", "product_size": "Size",
-                "left_tm": "Fwd Tm", "right_tm": "Rev Tm", "left_gc": "Fwd GC", "right_gc": "Rev GC"}
+
+        COLS = {
+            "ssr_id": "SSR ID", "pair_rank": "Pair", "contig": "Contig",
+            "motif": "Motif", "left_primer": "Forward", "right_primer": "Reverse",
+            "product_size": "Size", "left_tm": "Fwd Tm", "right_tm": "Rev Tm",
+            "left_gc": "Fwd GC", "right_gc": "Rev GC",
+        }
+
+        # Add Chromosome column if mapping exists
+        show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+        if show_chromosome:
+            COLS["chromosome"] = "Chromosome"
+
         display_cols = [c for c in COLS if c in display_df.columns]
+
+        # Insert Chromosome after Contig
+        if show_chromosome and "chromosome" in display_cols and "contig" in display_cols:
+            display_cols.remove("chromosome")
+            contig_idx = display_cols.index("contig")
+            display_cols.insert(contig_idx + 1, "chromosome")
+
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(display_df)); self.table.setColumnCount(len(display_cols))
-        self.table.setHorizontalHeaderLabels([COLS[c] for c in display_cols])
+        self.table.setRowCount(len(display_df))
+        self.table.setColumnCount(len(display_cols))
+        self.table.setHorizontalHeaderLabels([COLS.get(c, c) for c in display_cols])
+
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
         for ci, col in enumerate(display_cols):
-            if col == "contig": header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive); self.table.setColumnWidth(ci, 160)
-            elif col in ("left_primer", "right_primer"): header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive); self.table.setColumnWidth(ci, 200)
-            else: header.setSectionResizeMode(ci, QHeaderView.ResizeMode.ResizeToContents)
+            if col == "contig":
+                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(ci, 140)
+            elif col == "chromosome":
+                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(ci, 120)
+            elif col in ("left_primer", "right_primer"):
+                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(ci, 200)
+            else:
+                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.ResizeToContents)
+
         for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
+                if col == "chromosome":
+                    contig = display_df.iat[row_idx, display_df.columns.get_loc("contig")]
+                    val = self.state.get_display_name(contig)
+                else:
+                    val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
                 self.table.setItem(row_idx, col_idx, QTableWidgetItem(text))
         self.table.setSortingEnabled(True)
@@ -580,7 +612,17 @@ class PrimerPanel(QWidget):
         if not path: return
         import pandas as pd
         primers = self.state.filtered_primer_results or self.state.primer_results
-        pd.DataFrame(primers).to_csv(path, index=False, encoding="utf-8-sig")
+        df = pd.DataFrame(primers)
+        if hasattr(self.state, 'get_display_name'):
+            df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
+        df.rename(columns={
+            "ssr_id": "SSR ID", "pair_rank": "Pair", "contig": "Contig",
+            "motif": "Motif", "repeat_count": "Repeat count",
+            "left_primer": "Forward", "right_primer": "Reverse",
+            "product_size": "Size", "left_tm": "Fwd Tm", "right_tm": "Rev Tm",
+            "left_gc": "Fwd GC", "right_gc": "Rev GC",
+            "left_3end_dg": "Fwd 3' ΔG", "right_3end_dg": "Rev 3' ΔG",
+        }).to_csv(path, index=False, encoding="utf-8-sig")
         self.mw.set_status(f"Saved to {path}")
 
     def _download_fasta(self):

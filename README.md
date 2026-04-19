@@ -1,100 +1,70 @@
 # GRACE
 ### Genomic Repeat Analysis and Characterisation Engine
 
-GRACE is a standalone, offline, cross-platform desktop application for SSR (microsatellite) marker development. It integrates SSR detection, Primer3-based primer design, BLAST-based specificity validation, genomic annotation, and lab-ready export in a single graphical interface — no command line required.
+GRACE is a standalone, offline, cross‑platform desktop application for microsatellite (SSR) marker development. It combines SSR detection, Primer3‑based primer design, BLAST specificity filtering, genomic annotation, and lab‑ready exports in a single graphical interface — no command line needed.
 
 ---
 
 ## Features
 
-- **SSR Detection** — fast regex-based scanning across all motif lengths (di- to hexanucleotide), with full canonical motif standardisation
-- **SSR Summary** — karyotype view showing exact SSR positions along each chromosome, motif type breakdown, and genomic feature distribution
-- **Primer Design** — Primer3-based design with low-complexity flank filtering, quality filters, and two design modes:
-  - **Standard mode** — optimised for capillary electrophoresis / fragment analysis
-  - **GBS mode** — optimised for Illumina amplicon sequencing (genotype-by-sequencing)
-- **Specificity Checking** — bundled BLAST+ binaries, no external installation required
-- **GFF Annotation** — optional GFF3/GTF annotation support for exon/intron/intergenic classification and chromosome name mapping
-- **GBS Tools** — multiplex pool compatibility checker, amplicon sequence exporter, and sequencing platform recommender
-- **Final Report** — full pipeline summary with charts, filtering funnel, and PDF export
+- **SSR Detection** – fast regex‑based scanning for di‑ to hexanucleotide repeats, with canonical motif standardisation and optional adjacent‑motif filtering.
+- **SSR Summary** – interactive karyotype view showing SSR positions along chromosomes, motif type distribution, and genomic feature breakdown (exon/intron/intergenic) when a GFF is loaded.
+- **Primer Design** – Primer3‑powered design with quality filters. Two parameter presets:
+  - **Capillary Electrophoresis** – optimised for fragment analysis (M13 tails, dye multiplexing).
+  - **Amplicon Sequencing** – optimised for Illumina amplicon panels (P5/P7 tails, tight Tm, short products).
+- **Specificity Checking** – bundled BLAST+ binaries; no external installation required.
+- **GFF Annotation** – optional GFF3/GTF support for exon/intron/intergenic classification and chromosome name mapping.
+- **Three Complete Workflows**
+  - **Amplicon Sequencing** – validate multiplex primer pools for dimer risks, amplicon size, and GC content. Optimise panels and export tailed primers with amplicon reference sequences.
+  - **Capillary Electrophoresis** – assign dyes (FAM, VIC, NED, PET) and size bins. Supports multiple panels (injections) and exports ready‑to‑order primers with M13 tails.
+  - **GBS‑RE (Restriction‑Enzyme GBS)** – discover SSRs located within user‑defined restriction fragments (e.g. PstI‑MspI). Compare enzyme combinations, generate barcodes, and export marker lists.
+- **Linkage Disequilibrium Filter** – thin markers by physical distance across all workflows.
+- **Chromosome View** – visualise marker positions on chromosomes or contigs throughout the application.
+- **Project Summary** – dynamic, tabbed summary of all completed steps with embedded charts. Export a comprehensive PDF report.
 
 ---
 
 ## Installation
 
-### Pre-built binaries
+### Pre‑built Binaries
+Download the latest release for your platform from the [Releases](https://github.com/jackburton-qub/GRACE/releases) page. Extract the folder and run `GRACE.exe` (Windows) or open `GRACE.app` (macOS). BLAST+ is bundled – no separate installation required.
 
-Download the latest release for your platform from the [Releases](../../releases) page. No installation required — extract the folder and run `GRACE.exe` (Windows) or open `GRACE.app` (Mac).
-
-BLAST+ binaries are bundled with the application. No separate BLAST installation is needed.
-
-### Running from source
-
+### Running from Source
 ```bash
 git clone https://github.com/jackburton-qub/GRACE.git
 cd GRACE
 pip install -r requirements.txt
 python main.py
-```
-
----
-
-## Workflow
-
-```
-01  Load Genome        — FASTA/FASTQ + optional GFF3/GTF annotation
-02  Detect SSRs        — scan for perfect repeats, annotate with genomic features
-03  SSR Summary        — visualise distribution across chromosomes
-04  Design Primers     — Standard or GBS mode
-05  Check Specificity  — BLAST primers against the genome
-06  BLAST Results      — view and filter results
-07  Final Report       — pipeline summary, charts, PDF/CSV/FASTA export
-08  GBS Tools          — multiplex checker, amplicon FASTA, platform recommender
-```
-
----
-
-## GBS Mode
-
-GRACE supports genotype-by-sequencing (SSR-GBS) workflows for Illumina amplicon sequencing:
-
-- Short product sizes (80–200bp) compatible with 300bp paired-end reads
-- Tighter Tm range for consistent multiplexed PCR
-- Illumina M13 adapter tails appended to primer sequences
-- Low-complexity flank filtering to remove repeat-adjacent primers
-- Multiplex pool compatibility checker for cross-primer dimer detection
-- Expected amplicon sequence export for allele-calling tools (STRait Razor, HipSTR)
-- Sequencing platform recommender based on allele size range
-
----
-
-## Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| PyQt6 | Desktop GUI framework |
-| primer3-py | Primer design |
-| pandas | Data handling |
-| numpy | Numerical operations |
-| reportlab | PDF report generation |
-| BLAST+ | Bundled — specificity checking |
-
----
-
-## Supported file formats
-
-| Format | Input | Output |
-|--------|-------|--------|
-| FASTA (.fa, .fasta, .fna) | ✓ Genome | |
-| FASTQ (.fastq, .fq) | ✓ Genome | |
-| GFF3 (.gff, .gff3) | ✓ Annotation | |
-| GTF (.gtf) | ✓ Annotation | |
-| CSV | | ✓ SSRs, primers, results |
-| FASTA | | ✓ Primers (BLAST-ready, GBS-tailed, amplicons) |
-| PDF | | ✓ Final report |
-| JSON | ✓ Session restore | ✓ Session save |
-
----
-
-## Licence
-
-MIT — see [LICENSE](LICENSE) for details.
+Workflow
+text
+01  Load Genome        – FASTA/FASTQ + optional GFF3/GTF annotation
+02  Detect SSRs        – scan for perfect repeats, annotate with genomic features
+03  SSR Summary        – visualise distribution and statistics
+04  Design Primers     – Capillary or Amplicon Sequencing mode
+05  Check Specificity  – BLAST primers against the genome
+06  BLAST Results      – review and filter by specificity
+07  Project Summary    – complete pipeline overview with PDF export
+08  Amplicon Tools     – multiplex validation and panel optimisation
+09  Capillary Tools    – dye assignment and size binning
+10  GBS‑RE Tools       – restriction fragment marker discovery
+Dependencies
+Package	Purpose
+PyQt6	Desktop GUI framework
+primer3‑py	Primer design
+pandas	Data handling
+numpy	Numerical operations
+reportlab	PDF report generation
+BLAST+	Bundled – specificity checking
+Supported File Formats
+Format	Input	Output
+FASTA (.fa, .fasta, .fna)	✓	
+FASTQ (.fastq, .fq)	✓	
+GenBank (.gb, .gbff, .gbk)	✓	
+GFF3 (.gff, .gff3)	✓	
+GTF (.gtf)	✓	
+CSV		✓
+FASTA (primers, amplicons)		✓
+PDF		✓
+JSON (session)	✓	✓
+Licence
+MIT – see LICENSE for details.

@@ -1,6 +1,7 @@
 """
 ssr_panel.py — SSR Detection
 Single scroll area. Table has fixed height. No layout tricks.
+Added adjacent same‑motif filter to reduce problematic loci.
 """
 import os, sys, time
 
@@ -182,8 +183,26 @@ class SSRPanel(QWidget):
         sg.addWidget(self.excl_homo,  2, 0, 1, 2)
         sg.addWidget(self.search_rev, 2, 2, 1, 2)
 
+        # ----- Adjacent same‑motif filter -----
+        self.filter_adjacent_cb = QCheckBox("Filter out SSRs too close to another with same motif")
+        self.filter_adjacent_cb.setChecked(True)
+        self.filter_adjacent_cb.setToolTip(
+            "Remove SSRs that are within the specified distance of another SSR with "
+            "the identical canonical motif. This reduces primer design conflicts "
+            "caused by nearby similar repeats."
+        )
+        sg.addWidget(self.filter_adjacent_cb, 3, 0, 1, 2)
+
+        sg.addWidget(QLabel("Min distance (bp):"), 3, 2)
+        self.adjacent_distance = QSpinBox()
+        self.adjacent_distance.setRange(50, 1000)
+        self.adjacent_distance.setValue(200)
+        self.adjacent_distance.setSingleStep(50)
+        self.adjacent_distance.setToolTip("Minimum allowed distance between SSRs with the same canonical motif.")
+        sg.addWidget(self.adjacent_distance, 3, 3)
+
         rep_lbl = QLabel("Min repeat counts")
-        sg.addWidget(rep_lbl, 3, 0)
+        sg.addWidget(rep_lbl, 4, 0)
         self.min_repeats = {}
         self.min_repeat_labels = {}
         rep_row = QHBoxLayout(); rep_row.setSpacing(8)
@@ -197,7 +216,7 @@ class SSRPanel(QWidget):
             rep_row.addWidget(lbl); rep_row.addWidget(sp)
         rep_row.addStretch()
         rep_w = QWidget(); rep_w.setLayout(rep_row)
-        sg.addWidget(rep_w, 3, 1, 1, 3)
+        sg.addWidget(rep_w, 4, 1, 1, 3)
         layout.addWidget(settings_group)
 
         # Run
@@ -267,6 +286,36 @@ class SSRPanel(QWidget):
             self.min_repeats[k].setVisible(v)
 
     # ---------------------------------------------------------
+    # Adjacent same‑motif filter
+    # ---------------------------------------------------------
+    def _filter_adjacent_same_motif(self, ssrs, min_distance):
+        """Remove SSRs that are within min_distance of another SSR with the same canonical motif."""
+        if not ssrs:
+            return ssrs
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for ssr in ssrs:
+            key = (ssr["contig"], ssr["canonical_motif"])
+            groups[key].append(ssr)
+
+        filtered = []
+        for key, group in groups.items():
+            group_sorted = sorted(group, key=lambda x: x["start"])
+            keep = []
+            last_end = -min_distance
+            for ssr in group_sorted:
+                if ssr["start"] - last_end >= min_distance:
+                    keep.append(ssr)
+                    last_end = ssr["end"]
+            filtered.extend(keep)
+
+        # Re‑sort and reassign IDs
+        filtered.sort(key=lambda x: (x["contig"], x["start"]))
+        for i, s in enumerate(filtered, start=1):
+            s["ssr_id"] = i
+        return filtered
+
+    # ---------------------------------------------------------
     # RUN
     # ---------------------------------------------------------
     def _run(self):
@@ -314,6 +363,14 @@ class SSRPanel(QWidget):
         self._set_status(f"Scanning contig {done:,} of {total:,}...", TEXT_SECONDARY)
 
     def _on_done(self, ssrs, elapsed):
+        # Apply adjacent same‑motif filter if enabled
+        if self.filter_adjacent_cb.isChecked():
+            before = len(ssrs)
+            min_dist = self.adjacent_distance.value()
+            ssrs = self._filter_adjacent_same_motif(ssrs, min_dist)
+            after = len(ssrs)
+            print(f"[SSR Panel] Adjacent filter removed {before - after:,} SSRs (min distance {min_dist} bp)")
+
         self.state.clear_downstream_of_ssrs()
         self.state.ssrs             = ssrs
         self.state.ssr_detection_time = elapsed
@@ -439,19 +496,26 @@ class SSRPanel(QWidget):
         }
         display_cols = [c for c in cols if c in df.columns]
 
+        # Add Chromosome column if we have mapping
+        show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+        if show_chromosome:
+            display_cols.append("chromosome")  # will be added virtually
+            col_labels["chromosome"] = "Chromosome"
+
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(display_df))
         self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels([col_labels.get(c, c) for c in display_cols])
 
-        # Column resize modes — contig gets fixed interactive width,
-        # others resize to content, last column stretches
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
         for col_idx, col in enumerate(display_cols):
             if col == "contig":
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
-                self.table.setColumnWidth(col_idx, 160)
+                self.table.setColumnWidth(col_idx, 140)
+            elif col == "chromosome":
+                header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+                self.table.setColumnWidth(col_idx, 120)
             elif col in ("left_primer", "right_primer"):
                 header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
                 self.table.setColumnWidth(col_idx, 200)
@@ -460,7 +524,11 @@ class SSRPanel(QWidget):
 
         for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
-                val  = display_df.iat[row_idx, display_df.columns.get_loc(col)]
+                if col == "chromosome":
+                    contig = display_df.iat[row_idx, display_df.columns.get_loc("contig")]
+                    val = self.state.get_display_name(contig)
+                else:
+                    val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
                 item = QTableWidgetItem(str(val))
                 if col_idx == 0:
                     item.setData(
@@ -501,7 +569,10 @@ class SSRPanel(QWidget):
         )
         if path:
             import pandas as pd
-            pd.DataFrame(self.state.ssrs).rename(columns={
+            df = pd.DataFrame(self.state.ssrs)
+            if hasattr(self.state, 'get_display_name'):
+                df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
+            df.rename(columns={
                 "ssr_id":          "SSR ID",
                 "contig":          "Contig",
                 "start":           "Start (bp)",

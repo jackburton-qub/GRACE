@@ -34,12 +34,18 @@ class AppState:
     product_min:             int  = 100
     product_max:             int  = 250
 
-    # Workflow mode: "capillary", "amplicon", or "gbs_re" (future)
+    # Workflow mode: "capillary", "amplicon", or "gbs_re"
     workflow_mode:           str  = "capillary"
 
     # ── Specificity ───────────────────────────────────────
     specificity_results: Optional[list] = None
     blast_raw_rows:      Optional[list] = None
+
+    # ── Workflow Results ─────────────────────────────────
+    amplicon_validation_result: Optional[dict] = None
+    capillary_result:           Optional[dict] = None
+    gbs_re_markers:             Optional[list] = None
+    gbs_re_passing_frags:       int = 0
 
     # ── Run version stamps ────────────────────────────────
     ssr_version:     int = 0
@@ -77,6 +83,10 @@ class AppState:
         self.specificity_results = None
         self.blast_raw_rows      = None
         self.blast_version       = 0
+        self.amplicon_validation_result = None
+        self.capillary_result = None
+        self.gbs_re_markers = None
+        self.gbs_re_passing_frags = 0
 
     # ---------------------------------------------------------
     # Properties
@@ -113,3 +123,11 @@ class AppState:
         if self.filtered_primer_results:
             return self.filtered_primer_results
         return self.primer_results or []
+
+    def get_display_name(self, contig: str) -> str:
+        """Return chromosome name if available, otherwise contig."""
+        if self.chrom_names and contig in self.chrom_names:
+            return self.chrom_names[contig]
+        if self.gff_features and hasattr(self.gff_features, 'get_display_name'):
+            return self.gff_features.get_display_name(contig)
+        return contig

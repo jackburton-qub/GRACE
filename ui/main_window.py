@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
         self._font_btn_group = QButtonGroup(self)
         self._font_preset = FONT_SIZE_PRESET_DEFAULT
 
-        for preset in ("Small", "Medium", "Large"):
+        for preset in ("Medium", "Large"):
             btn = QRadioButton(preset)
             btn.setStyleSheet(f"""
                 QRadioButton {{

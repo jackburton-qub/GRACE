@@ -1,483 +1,40 @@
 """
-report_panel.py — Final Report
-Full pipeline summary with charts, statistics, and PDF export.
-Shows the complete journey from raw SSRs to validated primer pairs.
+report_panel.py — Project Summary & PDF Export
+Enhanced UI with detailed tables and comprehensive PDF report.
+Includes Panel column for Capillary results.
 """
-import os, sys
-from collections import Counter, defaultdict
 
+import os
+from collections import Counter
+from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QGridLayout, QScrollArea, QTableWidget,
-    QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog,
-    QFrame, QSizePolicy,
+    QGroupBox, QScrollArea, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QFileDialog, QMessageBox,
+    QTabWidget,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QPainterPath
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 
 from ui.style import (
-    ACCENT, SUCCESS, ERROR, WARNING, TEXT_SECONDARY, TEXT_PRIMARY,
+    ACCENT, SUCCESS, WARNING, TEXT_SECONDARY, TEXT_PRIMARY,
     FONT_UI, FONT_MONO, FONT_SIZE_NORMAL, FONT_SIZE_LARGE,
-    FONT_SIZE_SMALL, PANEL_PADDING, BG_MID, BG_LIGHT, BORDER,
+    FONT_SIZE_SMALL, PANEL_PADDING, BG_MID, BORDER,
 )
 
-TABLE_DISPLAY_LIMIT = 10_000
+from ui.panels.ssr_summary_panel import PieChart, VerticalBarChart
 
-CHART_COLOURS = [
+CHART_COLORS = [
     "#4C9BE8", "#56C596", "#F4A261", "#E76F51",
     "#9B89C4", "#48CAE4", "#F6C90E", "#E07BA5",
 ]
 
-FEATURE_COLOURS = {
-    "exon":       "#56C596",
-    "CDS":        "#4C9BE8",
-    "intron":     "#F4A261",
-    "intergenic": "#9B89C4",
-    "unknown":    "#666688",
-}
-
-
-# ---------------------------------------------------------------------------
-# Mini chart widgets (self-contained, no external deps)
-# ---------------------------------------------------------------------------
-
-class MiniPieChart(QWidget):
-    def __init__(self, title="", parent=None):
-        super().__init__(parent)
-        self._data  = []
-        self._title = title
-        self.setMinimumHeight(180)
-        self.setMinimumWidth(260)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_data(self, data):
-        """data: list of (label, value, colour)"""
-        self._data = data
-        self.update()
-
-    def paintEvent(self, event):
-        if not self._data: return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        pad  = 12
-        lw   = 140
-        pw   = min(w - lw - pad * 3, h - pad * 2 - 20)
-        px   = pad
-        py   = pad + 18 + max(0, (h - pw - pad * 2 - 18) // 2)
-
-        if self._title:
-            painter.setPen(QColor(TEXT_PRIMARY))
-            painter.setFont(QFont(FONT_UI, FONT_SIZE_SMALL, QFont.Weight.Bold))
-            painter.drawText(px, pad + 12, self._title)
-
-        total = sum(v for _, v, _ in self._data) or 1
-        angle = 90 * 16
-        for _, value, colour in self._data:
-            span = int(360 * 16 * value / total)
-            painter.setBrush(QBrush(QColor(colour)))
-            painter.setPen(QPen(QColor(BG_MID), 2))
-            painter.drawPie(px, py, pw, pw, angle, span)
-            angle += span
-
-        lx = px + pw + pad
-        ly = py
-        painter.setFont(QFont(FONT_UI, max(7, FONT_SIZE_SMALL - 1)))
-        for label, value, colour in self._data:
-            pct = value / total * 100
-            painter.setBrush(QBrush(QColor(colour)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(lx, ly, 9, 9, 2, 2)
-            painter.setPen(QColor(TEXT_PRIMARY))
-            painter.drawText(lx + 13, ly + 8, f"{label}: {value:,} ({pct:.1f}%)")
-            ly += 19
-        painter.end()
-
-
-class MiniBarChart(QWidget):
-    def __init__(self, title="", parent=None):
-        super().__init__(parent)
-        self._data  = []
-        self._title = title
-        self.setMinimumHeight(180)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_data(self, data):
-        """data: list of (label, value, colour)"""
-        self._data = data
-        self.update()
-
-    def paintEvent(self, event):
-        if not self._data: return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        pl, pr, pt, pb = 50, 12, 28, 48
-        cw = w - pl - pr
-        ch = h - pt - pb
-        max_val = max(v for _, v, _ in self._data) or 1
-        n   = len(self._data)
-        gap = max(2, cw // (n * 5))
-        bw  = max(4, (cw - gap * (n + 1)) // n)
-
-        if self._title:
-            painter.setPen(QColor(TEXT_PRIMARY))
-            painter.setFont(QFont(FONT_UI, FONT_SIZE_SMALL, QFont.Weight.Bold))
-            painter.drawText(pl, pt - 8, self._title)
-
-        painter.setPen(QPen(QColor(BORDER), 1))
-        painter.drawLine(pl, pt, pl, pt + ch)
-        painter.drawLine(pl, pt + ch, pl + cw, pt + ch)
-
-        painter.setFont(QFont(FONT_MONO, max(6, FONT_SIZE_SMALL - 2)))
-        for frac in [0, 0.5, 1.0]:
-            yv = int(max_val * frac)
-            yp = pt + ch - int(ch * frac)
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.drawText(0, yp + 4, pl - 4, 12, Qt.AlignmentFlag.AlignRight, _fmt_num(yv))
-            if frac > 0:
-                painter.setPen(QPen(QColor(BORDER), 1, Qt.PenStyle.DotLine))
-                painter.drawLine(pl, yp, pl + cw, yp)
-
-        for i, (label, value, colour) in enumerate(self._data):
-            x  = pl + gap + i * (bw + gap)
-            bh = int(ch * value / max_val)
-            y  = pt + ch - bh
-            path = QPainterPath()
-            path.addRoundedRect(x, y, bw, bh, 3, 3)
-            painter.fillPath(path, QBrush(QColor(colour)))
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.setFont(QFont(FONT_MONO, max(6, FONT_SIZE_SMALL - 2)))
-            painter.save()
-            painter.translate(x + bw // 2, pt + ch + 6)
-            painter.rotate(35)
-            painter.drawText(0, 0, str(label)[:18])
-            painter.restore()
-        painter.end()
-
-
-class FunnelWidget(QWidget):
-    """
-    Visualises the filtering pipeline as a funnel:
-    SSRs detected → Primers designed → Primers filtered → BLAST PASS
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._stages = []
-        self.setMinimumHeight(120)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_stages(self, stages):
-        """stages: list of (label, count, colour)"""
-        self._stages = stages
-        self.update()
-
-    def paintEvent(self, event):
-        if not self._stages: return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h  = self.width(), self.height()
-        n     = len(self._stages)
-        pad   = 16
-        bh    = (h - pad * 2) // n - 6
-        max_v = max(s[1] for s in self._stages) or 1
-
-        for i, (label, count, colour) in enumerate(self._stages):
-            frac  = count / max_v
-            bw    = max(60, int((w - pad * 2) * frac))
-            x     = pad + (w - pad * 2 - bw) // 2
-            y     = pad + i * (bh + 6)
-
-            path = QPainterPath()
-            path.addRoundedRect(x, y, bw, bh, 4, 4)
-            painter.fillPath(path, QBrush(QColor(colour + "CC")))
-            painter.strokePath(path, QPen(QColor(colour), 1))
-
-            painter.setPen(QColor(TEXT_PRIMARY))
-            painter.setFont(QFont(FONT_UI, FONT_SIZE_SMALL - 1, QFont.Weight.Bold))
-            painter.drawText(x + 8, y + bh // 2 + 5, f"{label}: {count:,}")
-
-            if i < n - 1:
-                pct = self._stages[i + 1][1] / count * 100 if count else 0
-                painter.setPen(QColor(TEXT_SECONDARY))
-                painter.setFont(QFont(FONT_MONO, max(6, FONT_SIZE_SMALL - 2)))
-                painter.drawText(w - 60, y + bh + 2, f"↓ {pct:.1f}%")
-        painter.end()
-
-
-# ---------------------------------------------------------------------------
-# PDF worker
-# ---------------------------------------------------------------------------
-
-class PDFWorker(QThread):
-    finished = pyqtSignal(str)
-    error    = pyqtSignal(str)
-
-    def __init__(self, pass_primers, state, output_path):
-        super().__init__()
-        self.pass_primers = pass_primers
-        self.state        = state
-        self.output_path  = output_path
-
-    def run(self):
-        try:
-            _write_pdf(self.pass_primers, self.state, self.output_path)
-            self.finished.emit(self.output_path)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _fmt_num(n):
-    if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
-    if n >= 1_000:     return f"{n/1_000:.1f}k"
-    return str(n)
-
-
-def _stat_card(label, value, colour=None):
-    w = QWidget()
-    w.setStyleSheet(f"background: {BG_MID}; border: 1px solid {BORDER}; border-radius: 6px;")
-    l = QVBoxLayout(w); l.setContentsMargins(12, 8, 12, 8); l.setSpacing(2)
-    lbl = QLabel(label)
-    lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL - 1}pt; background: transparent; border: none;")
-    val = QLabel(value)
-    val.setFont(QFont(FONT_MONO, FONT_SIZE_LARGE, QFont.Weight.Bold))
-    val.setStyleSheet(f"color: {colour or ACCENT}; background: transparent; border: none;")
-    l.addWidget(val); l.addWidget(lbl)
-    return w
-
-
-def _section_divider(title):
-    w = QWidget()
-    l = QHBoxLayout(w); l.setContentsMargins(0, 8, 0, 4); l.setSpacing(8)
-    lbl = QLabel(title)
-    lbl.setFont(QFont(FONT_UI, FONT_SIZE_NORMAL, QFont.Weight.Bold))
-    lbl.setStyleSheet(f"color: {ACCENT};")
-    line = QFrame(); line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet(f"color: {BORDER};")
-    l.addWidget(lbl); l.addWidget(line, 1)
-    return w
-
-
-# ---------------------------------------------------------------------------
-# PDF generation
-# ---------------------------------------------------------------------------
-
-def _write_pdf(pass_primers, state, path):
-    try:
-        from reportlab.lib.pagesizes import A4
-        _write_pdf_reportlab(pass_primers, state, path)
-    except ImportError:
-        _write_txt_fallback(pass_primers, state, path.replace(".pdf", ".txt"))
-        raise RuntimeError(
-            "reportlab is not installed — saved as plain text instead.\n"
-            "Install with: pip install reportlab"
-        )
-
-
-def _write_pdf_reportlab(pass_primers, state, path):
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib import colors
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable,
-    )
-    import datetime
-
-    doc    = SimpleDocTemplate(path, pagesize=A4,
-                               leftMargin=2*cm, rightMargin=2*cm,
-                               topMargin=2*cm, bottomMargin=2*cm)
-    styles = getSampleStyleSheet()
-    acc    = colors.HexColor("#4C9BE8")
-
-    t_style  = ParagraphStyle("T",  parent=styles["Title"],   textColor=acc,  fontSize=20, spaceAfter=4)
-    h1_style = ParagraphStyle("H1", parent=styles["Heading1"], textColor=acc, fontSize=13, spaceBefore=12, spaceAfter=4)
-    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], textColor=colors.HexColor("#888888"), fontSize=10, spaceBefore=8, spaceAfter=2)
-    body     = ParagraphStyle("B",  parent=styles["Normal"],  fontSize=9, leading=13)
-    small    = ParagraphStyle("S",  parent=styles["Normal"],  fontSize=7, textColor=colors.HexColor("#888888"))
-
-    story = []
-
-    # Header
-    story.append(Paragraph("GRACE — Final SSR Marker Report", t_style))
-    story.append(Paragraph("Genomic Repeat Analysis and Characterisation Engine", small))
-    story.append(HRFlowable(width="100%", color=acc, thickness=1))
-    story.append(Spacer(1, 0.3*cm))
-
-    # Run info
-    story.append(Paragraph("Run Information", h1_style))
-    info = [
-        ["Genome file",    state.genome_filename or "—"],
-        ["Annotation",     state.gff_filename or "None loaded"],
-        ["Design mode",    "GBS (Genotype-by-Sequencing)" if getattr(state, "gbs_mode", False) else "Standard"],
-        ["Report date",    datetime.datetime.now().strftime("%Y-%m-%d %H:%M")],
-    ]
-    story.append(Table(info, colWidths=[4*cm, 13*cm], style=TableStyle([
-        ("FONTSIZE", (0,0),(-1,-1), 9),
-        ("TEXTCOLOR", (0,0),(0,-1), colors.HexColor("#888888")),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
-    ])))
-    story.append(Spacer(1, 0.3*cm))
-
-    # Pipeline summary
-    story.append(Paragraph("Pipeline Summary", h1_style))
-    n_ssrs    = len(state.ssrs) if state.ssrs else 0
-    n_primers = len(state.primer_results) if state.primer_results else 0
-    n_filtered = len(state.filtered_primer_results) if state.filtered_primer_results else n_primers
-    n_spec    = len(state.specificity_results) if state.specificity_results else 0
-    n_pass    = len(pass_primers)
-    pass_rate = n_pass / n_spec * 100 if n_spec else 0
-
-    pipeline = [
-        ["Stage", "Count", "Notes"],
-        ["SSRs detected",            f"{n_ssrs:,}",     "Raw SSRs from genome scan"],
-        ["Primer pairs designed",    f"{n_primers:,}",  "After low-complexity filter"],
-        ["After quality filters",    f"{n_filtered:,}", "3' stability and GC clamp filters"],
-        ["Submitted to BLAST",       f"{n_spec:,}",     "Specificity checked against genome"],
-        ["PASS (specific markers)",  f"{n_pass:,}",     f"{pass_rate:.1f}% pass rate"],
-    ]
-    story.append(Table(pipeline, colWidths=[5*cm, 3*cm, 9*cm], style=TableStyle([
-        ("FONTSIZE",      (0,0),(-1,-1), 9),
-        ("FONTNAME",      (0,0),(-1,0), "Helvetica-Bold"),
-        ("BACKGROUND",    (0,0),(-1,0), acc),
-        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#F4F8FF")]),
-        ("GRID",          (0,0),(-1,-1), 0.25, colors.HexColor("#DDDDDD")),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
-        ("FONTNAME",      (0,5),(0,5), "Helvetica-Bold"),
-        ("TEXTCOLOR",     (1,5),(1,5), colors.HexColor("#56C596")),
-    ])))
-    story.append(Spacer(1, 0.4*cm))
-
-    # SSR breakdown
-    if state.ssrs:
-        story.append(Paragraph("SSR Detection Results", h1_style))
-        from collections import Counter
-        motif_labels = {2:"Dinucleotide",3:"Trinucleotide",4:"Tetranucleotide",
-                        5:"Pentanucleotide",6:"Hexanucleotide"}
-        motif_counts = Counter(len(s["motif"]) for s in state.ssrs)
-        motif_data   = [[motif_labels.get(k,f"{k}bp"), f"{v:,}", f"{v/n_ssrs*100:.1f}%"]
-                        for k, v in sorted(motif_counts.items())]
-        motif_table  = [["Motif type", "Count", "% of SSRs"]] + motif_data
-        story.append(Table(motif_table, colWidths=[5*cm, 3*cm, 4*cm], style=TableStyle([
-            ("FONTSIZE",      (0,0),(-1,-1), 9),
-            ("FONTNAME",      (0,0),(-1,0), "Helvetica-Bold"),
-            ("BACKGROUND",    (0,0),(-1,0), colors.HexColor("#2A2A4A")),
-            ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#F4F8FF")]),
-            ("GRID",          (0,0),(-1,-1), 0.25, colors.HexColor("#DDDDDD")),
-            ("BOTTOMPADDING", (0,0),(-1,-1), 4),
-        ])))
-
-        if state.ssrs and "genomic_feature" in state.ssrs[0]:
-            story.append(Spacer(1, 0.2*cm))
-            story.append(Paragraph("Genomic Feature Distribution (SSRs)", h2_style))
-            feat_counts = Counter(s.get("genomic_feature","unknown") for s in state.ssrs)
-            feat_data   = [[f.capitalize(), f"{v:,}", f"{v/n_ssrs*100:.1f}%"]
-                           for f, v in sorted(feat_counts.items(), key=lambda x:-x[1])]
-            feat_table  = [["Feature", "SSR count", "% of total"]] + feat_data
-            story.append(Table(feat_table, colWidths=[4*cm, 3*cm, 4*cm], style=TableStyle([
-                ("FONTSIZE",      (0,0),(-1,-1), 9),
-                ("FONTNAME",      (0,0),(-1,0), "Helvetica-Bold"),
-                ("BACKGROUND",    (0,0),(-1,0), colors.HexColor("#2A2A4A")),
-                ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
-                ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#F4F8FF")]),
-                ("GRID",          (0,0),(-1,-1), 0.25, colors.HexColor("#DDDDDD")),
-                ("BOTTOMPADDING", (0,0),(-1,-1), 4),
-            ])))
-        story.append(Spacer(1, 0.3*cm))
-
-    # PASS primers table
-    story.append(Paragraph("PASS Primer Pairs", h1_style))
-    story.append(Paragraph(
-        f"{n_pass:,} primer pairs passed specificity checking. "
-        "Pair rank 0 is Primer3's top-ranked pair per SSR.",
-        body
-    ))
-    story.append(Spacer(1, 0.2*cm))
-
-    has_feat = pass_primers and "genomic_feature" in pass_primers[0]
-    headers  = ["SSR ID","Contig","Motif","Pair","Forward (5'→3')","Reverse (5'→3')","Size","Fwd Tm","Rev Tm"]
-    col_w    = [1.2*cm, 3*cm, 1.4*cm, 0.8*cm, 4.8*cm, 4.8*cm, 1.2*cm, 1.2*cm, 1.2*cm]
-    if has_feat:
-        headers.append("Feature"); col_w.append(1.8*cm)
-
-    rows = [headers]
-    for p in pass_primers[:4000]:
-        row = [
-            str(p.get("ssr_id","")),
-            str(p.get("contig",""))[-22:],
-            str(p.get("canonical_motif", p.get("motif",""))),
-            str(p.get("pair_rank",0)),
-            str(p.get("left_primer","")),
-            str(p.get("right_primer","")),
-            str(p.get("product_size","")),
-            f"{p.get('left_tm',0):.1f}",
-            f"{p.get('right_tm',0):.1f}",
-        ]
-        if has_feat: row.append(str(p.get("genomic_feature","")))
-        rows.append(row)
-
-    if len(pass_primers) > 4000:
-        rows.append(["...",f"({len(pass_primers)-4000:,} more — export CSV for full data)","","","","","","",""])
-
-    story.append(Table(rows, colWidths=col_w, repeatRows=1, style=TableStyle([
-        ("FONTSIZE",       (0,0),(-1,-1), 7),
-        ("FONTNAME",       (0,0),(-1,0), "Helvetica-Bold"),
-        ("BACKGROUND",     (0,0),(-1,0), acc),
-        ("TEXTCOLOR",      (0,0),(-1,0), colors.white),
-        ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, colors.HexColor("#F4F8FF")]),
-        ("GRID",           (0,0),(-1,-1), 0.25, colors.HexColor("#DDDDDD")),
-        ("BOTTOMPADDING",  (0,0),(-1,-1), 3),
-        ("TOPPADDING",     (0,0),(-1,-1), 3),
-        ("FONTNAME",       (4,1),(5,-1), "Courier"),
-    ])))
-
-    story.append(Spacer(1, 0.5*cm))
-    story.append(HRFlowable(width="100%", color=colors.HexColor("#DDDDDD"), thickness=0.5))
-    story.append(Paragraph(
-        "Generated by GRACE — Genomic Repeat Analysis and Characterisation Engine. "
-        "Primers designed using Primer3. Specificity verified by BLAST+ against the reference genome.",
-        small
-    ))
-    doc.build(story)
-
-
-def _write_txt_fallback(pass_primers, state, path):
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("GRACE — Final SSR Marker Report\n" + "="*60 + "\n\n")
-        f.write(f"Genome: {state.genome_filename or '—'}\n")
-        f.write(f"PASS primers: {len(pass_primers):,}\n\n")
-        f.write("\t".join(["SSR_ID","Contig","Motif","Pair","Forward","Reverse",
-                            "Product","Fwd_Tm","Rev_Tm","Feature"]) + "\n")
-        for p in pass_primers:
-            f.write("\t".join([
-                str(p.get("ssr_id","")), str(p.get("contig","")),
-                str(p.get("canonical_motif", p.get("motif",""))),
-                str(p.get("pair_rank",0)), str(p.get("left_primer","")),
-                str(p.get("right_primer","")), str(p.get("product_size","")),
-                f"{p.get('left_tm',0):.1f}", f"{p.get('right_tm',0):.1f}",
-                str(p.get("genomic_feature","")),
-            ]) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# Panel
-# ---------------------------------------------------------------------------
 
 class ReportPanel(QWidget):
     def __init__(self, state, main_window):
         super().__init__()
         self.state = state
-        self.mw    = main_window
-        self._worker       = None
-        self._last_version = -1
-        self._pass_primers = []
+        self.mw = main_window
         self._build_ui()
 
     def _build_ui(self):
@@ -491,382 +48,738 @@ class ReportPanel(QWidget):
 
         content = QWidget()
         scroll.setWidget(content)
-        L = QVBoxLayout(content)
-        L.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
-        L.setSpacing(16)
+        self._main_layout = QVBoxLayout(content)
+        self._main_layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
+        self._main_layout.setSpacing(16)
 
-        # Title
-        title = QLabel("Final Report")
+        title = QLabel("Project Summary")
         title.setFont(QFont(FONT_UI, FONT_SIZE_LARGE + 2, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {ACCENT};")
-        sub = QLabel("Complete pipeline summary — from genome scan to validated SSR markers")
-        sub.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        L.addWidget(title); L.addWidget(sub)
+        self._main_layout.addWidget(title)
 
-        self._placeholder = QLabel("Complete Specificity Check first to generate the final report.")
-        self._placeholder.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        L.addWidget(self._placeholder)
+        desc = QLabel("Review your results and generate a comprehensive PDF report.")
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
+        desc.setWordWrap(True)
+        self._main_layout.addWidget(desc)
 
-        # ── Key metrics cards ─────────────────────────────
-        self._cards_widget = QWidget()
-        self._cards_widget.setVisible(False)
-        cards_row = QHBoxLayout(self._cards_widget)
-        cards_row.setSpacing(10)
-        self._card_ssrs     = _stat_card("SSRs Detected", "—", ACCENT)
-        self._card_primers  = _stat_card("Primers Designed", "—", ACCENT)
-        self._card_pass     = _stat_card("PASS Markers", "—", SUCCESS)
-        self._card_rate     = _stat_card("Pass Rate", "—", SUCCESS)
-        self._card_motif    = _stat_card("Top Motif", "—", ACCENT)
-        for c in [self._card_ssrs, self._card_primers, self._card_pass,
-                  self._card_rate, self._card_motif]:
-            cards_row.addWidget(c)
-        L.addWidget(self._cards_widget)
-
-        # ── Pipeline funnel ───────────────────────────────
-        self._funnel_group = QGroupBox("Filtering Pipeline")
-        self._funnel_group.setVisible(False)
-        fg = QVBoxLayout(self._funnel_group)
-        self._funnel = FunnelWidget()
-        fg.addWidget(self._funnel)
-        L.addWidget(self._funnel_group)
-
-        # ── SSR breakdown charts ──────────────────────────
-        self._ssr_charts_group = QGroupBox("SSR Detection Breakdown")
-        self._ssr_charts_group.setVisible(False)
-        scg = QHBoxLayout(self._ssr_charts_group)
-        self._motif_pie    = MiniPieChart("Motif Type Distribution")
-        self._feature_pie  = MiniPieChart("Genomic Feature Distribution")
-        scg.addWidget(self._motif_pie)
-        scg.addWidget(self._feature_pie)
-        L.addWidget(self._ssr_charts_group)
-
-        # ── PASS primer breakdown charts ──────────────────
-        self._pass_charts_group = QGroupBox("PASS Primer Breakdown")
-        self._pass_charts_group.setVisible(False)
-        pcg = QHBoxLayout(self._pass_charts_group)
-        self._pass_motif_pie   = MiniPieChart("Motif Types (PASS)")
-        self._pass_feature_pie = MiniPieChart("Genomic Features (PASS)")
-        self._product_bar      = MiniBarChart("Product Size Distribution")
-        pcg.addWidget(self._pass_motif_pie)
-        pcg.addWidget(self._pass_feature_pie)
-        pcg.addWidget(self._product_bar)
-        L.addWidget(self._pass_charts_group)
-
-        # ── Chromosome coverage ───────────────────────────
-        self._chrom_group = QGroupBox("Coverage per Chromosome")
-        self._chrom_group.setVisible(False)
-        cg = QVBoxLayout(self._chrom_group)
-        self._chrom_note = QLabel("")
-        self._chrom_note.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        cg.addWidget(self._chrom_note)
-        self._chrom_bar = MiniBarChart("PASS markers per chromosome")
-        cg.addWidget(self._chrom_bar)
-        L.addWidget(self._chrom_group)
-
-        # ── Export ────────────────────────────────────────
-        self._export_group = QGroupBox("Export")
-        self._export_group.setVisible(False)
-        eg = QHBoxLayout(self._export_group)
-        self._pdf_btn   = QPushButton("Export PDF Report")
+        btn_layout = QHBoxLayout()
+        self._pdf_btn = QPushButton("📄 Generate PDF Report")
         self._pdf_btn.setObjectName("primary")
-        self._pdf_btn.clicked.connect(self._export_pdf)
-        self._csv_btn   = QPushButton("Export CSV")
-        self._csv_btn.clicked.connect(self._export_csv)
-        self._fasta_btn = QPushButton("Export FASTA")
-        self._fasta_btn.clicked.connect(self._export_fasta)
-        self._gbs_export_btn = QPushButton("Export GBS FASTA (tailed)")
-        self._gbs_export_btn.clicked.connect(self._export_gbs_fasta)
-        self._gbs_export_btn.setVisible(False)
-        eg.addWidget(self._pdf_btn)
-        eg.addWidget(self._csv_btn)
-        eg.addWidget(self._fasta_btn)
-        eg.addWidget(self._gbs_export_btn)
-        eg.addStretch()
-        self._export_status = QLabel("")
-        self._export_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        eg.addWidget(self._export_status)
-        L.addWidget(self._export_group)
+        self._pdf_btn.setMinimumHeight(40)
+        self._pdf_btn.clicked.connect(self._generate_pdf)
+        btn_layout.addWidget(self._pdf_btn)
+        btn_layout.addStretch()
+        self._main_layout.addLayout(btn_layout)
 
-        # ── Table ─────────────────────────────────────────
-        self._table_group = QGroupBox("PASS Primer Pairs")
-        self._table_group.setVisible(False)
-        tg = QVBoxLayout(self._table_group)
-        self._metrics_label = QLabel("")
-        self._metrics_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        tg.addWidget(self._metrics_label)
-        self._table = QTableWidget()
-        self._table.setAlternatingRowColors(True)
-        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._table.setSortingEnabled(True)
-        self._table.setFixedHeight(500)
-        tg.addWidget(self._table)
-        L.addWidget(self._table_group)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self._main_layout.addWidget(self._status_label)
 
-        L.addStretch()
+        self._tab_widget = QTabWidget()
+        self._main_layout.addWidget(self._tab_widget)
 
-    # ---------------------------------------------------------
-    # REBUILD
-    # ---------------------------------------------------------
-    def _rebuild(self):
-        if not self.state.has_specificity:
-            self._placeholder.setVisible(True)
-            for w in [self._cards_widget, self._funnel_group, self._ssr_charts_group,
-                      self._pass_charts_group, self._chrom_group,
-                      self._export_group, self._table_group]:
-                w.setVisible(False)
+        self._main_layout.addStretch()
+
+    def _refresh(self):
+        while self._tab_widget.count() > 0:
+            self._tab_widget.removeTab(0)
+
+        self._add_overview_tab()
+
+        all_primers = self.state.primer_results
+        if all_primers:
+            self._add_primer_tab(all_primers, "All Primers")
+
+        pass_primers = self._get_blast_pass_primers()
+        if pass_primers:
+            self._add_primer_tab(pass_primers, "PASS Primers")
+
+        if self.state.amplicon_validation_result:
+            self._add_amplicon_tab()
+
+        if self.state.capillary_result:
+            self._add_capillary_tab()
+
+        if self.state.gbs_re_markers:
+            self._add_gbs_re_tab()
+
+        if not any([self.state.has_ssrs, all_primers]):
+            self._status_label.setText("No data available. Complete previous steps first.")
+
+    def _get_blast_pass_primers(self):
+        spec_results = self.state.specificity_results
+        all_primers = self.state.primer_results
+        if not spec_results or not all_primers:
+            return []
+        pass_keys = set()
+        for r in spec_results:
+            if r.get("specificity_status") == "PASS":
+                ssr_id = r.get("ssr_id")
+                pair_rank = r.get("pair_rank")
+                if ssr_id is not None and pair_rank is not None:
+                    pass_keys.add((ssr_id, pair_rank))
+        return [p for p in all_primers if (p.get("ssr_id"), p.get("pair_rank")) in pass_keys]
+
+    def _add_overview_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(16)
+
+        if self.state.has_ssrs:
+            ssrs = self.state.ssrs
+            total = len(ssrs)
+            motifs = [s.get("canonical_motif", s.get("motif", "")) for s in ssrs]
+            motif_counts = Counter(motifs)
+
+            group = QGroupBox("SSR Detection Summary")
+            gl = QVBoxLayout(group)
+
+            metrics_layout = QHBoxLayout()
+            metrics = [
+                ("Total SSRs", f"{total:,}"),
+                ("Unique motifs", f"{len(motif_counts):,}"),
+                ("Contigs with SSRs", f"{len(set(s.get('contig') for s in ssrs)):,}"),
+            ]
+            for label, value in metrics:
+                card = self._make_metric_card(label, value)
+                metrics_layout.addWidget(card)
+            gl.addLayout(metrics_layout)
+
+            motif_types = self._get_motif_type_counts(ssrs)
+            pie = PieChart()
+            pie.set_data(motif_types)
+            pie.setMinimumHeight(180)
+            gl.addWidget(QLabel("Motif Type Distribution"))
+            gl.addWidget(pie)
+
+            top_motifs = motif_counts.most_common(10)
+            bar = VerticalBarChart()
+            bar.set_data(top_motifs)
+            bar.setMinimumHeight(200)
+            gl.addWidget(QLabel("Top 10 Canonical Motifs"))
+            gl.addWidget(bar)
+
+            layout.addWidget(group)
+
+        all_primers = self.state.primer_results
+        pass_primers = self._get_blast_pass_primers()
+        if all_primers:
+            group = QGroupBox("Primer Design Summary")
+            gl = QVBoxLayout(group)
+            metrics_layout = QHBoxLayout()
+            metrics = [
+                ("Total pairs", f"{len(all_primers):,}"),
+                ("PASS pairs", f"{len(pass_primers):,}" if pass_primers else "—"),
+                ("Unique loci", f"{len(set(p.get('ssr_id') for p in all_primers)):,}"),
+            ]
+            for label, value in metrics:
+                card = self._make_metric_card(label, value)
+                metrics_layout.addWidget(card)
+            gl.addLayout(metrics_layout)
+            layout.addWidget(group)
+
+        layout.addStretch()
+        self._tab_widget.addTab(tab, "Overview")
+
+    def _get_motif_type_counts(self, ssrs):
+        counts = Counter()
+        for ssr in ssrs:
+            motif = ssr.get("canonical_motif", ssr.get("motif", ""))
+            length = len(motif)
+            if length == 2:
+                counts["Di"] += 1
+            elif length == 3:
+                counts["Tri"] += 1
+            elif length == 4:
+                counts["Tetra"] += 1
+            elif length == 5:
+                counts["Penta"] += 1
+            elif length >= 6:
+                counts["Hexa"] += 1
+        return {k: v for k, v in counts.items() if v > 0}
+
+    def _add_primer_tab(self, primers, title):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        group = QGroupBox(f"{title} ({len(primers):,} pairs)")
+        gl = QVBoxLayout(group)
+
+        table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSortingEnabled(True)
+        cols = ["SSR ID", "Pair Rank", "Contig", "Motif", "Product Size", "Fwd Tm", "Rev Tm", "Fwd Primer", "Rev Primer"]
+        show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+        if show_chromosome:
+            cols.insert(2, "Chromosome")
+
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+
+        display_primers = primers[:100]
+        table.setRowCount(len(display_primers))
+        for i, p in enumerate(display_primers):
+            table.setItem(i, 0, QTableWidgetItem(str(p.get("ssr_id", ""))))
+            table.setItem(i, 1, QTableWidgetItem(str(p.get("pair_rank", ""))))
+            contig = p.get("contig", "")
+            if show_chromosome:
+                table.setItem(i, 2, QTableWidgetItem(self.state.get_display_name(contig)))
+                table.setItem(i, 3, QTableWidgetItem(contig))
+                table.setItem(i, 4, QTableWidgetItem(p.get("motif", "")))
+                table.setItem(i, 5, QTableWidgetItem(str(p.get("product_size", ""))))
+                table.setItem(i, 6, QTableWidgetItem(f"{p.get('left_tm', 0):.1f}"))
+                table.setItem(i, 7, QTableWidgetItem(f"{p.get('right_tm', 0):.1f}"))
+                table.setItem(i, 8, QTableWidgetItem(p.get("left_primer", "")))
+                table.setItem(i, 9, QTableWidgetItem(p.get("right_primer", "")))
+            else:
+                table.setItem(i, 2, QTableWidgetItem(contig))
+                table.setItem(i, 3, QTableWidgetItem(p.get("motif", "")))
+                table.setItem(i, 4, QTableWidgetItem(str(p.get("product_size", ""))))
+                table.setItem(i, 5, QTableWidgetItem(f"{p.get('left_tm', 0):.1f}"))
+                table.setItem(i, 6, QTableWidgetItem(f"{p.get('right_tm', 0):.1f}"))
+                table.setItem(i, 7, QTableWidgetItem(p.get("left_primer", "")))
+                table.setItem(i, 8, QTableWidgetItem(p.get("right_primer", "")))
+        table.resizeColumnsToContents()
+        gl.addWidget(table)
+
+        if len(primers) > 100:
+            gl.addWidget(QLabel(f"Showing first 100 of {len(primers):,} primer pairs."))
+
+        layout.addWidget(group)
+        self._tab_widget.addTab(tab, title)
+
+    def _add_amplicon_tab(self):
+        result = self.state.amplicon_validation_result
+        if not result:
+            return
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        group1 = QGroupBox("Validation Summary")
+        gl1 = QVBoxLayout(group1)
+        clean_pool = result.get("clean_pool", [])
+        issues = result.get("issues_summary", {})
+        metrics_layout = QHBoxLayout()
+        metrics = [
+            ("Input loci", str(result.get("n_input", 0))),
+            ("Passed checks", str(result.get("n_clean", 0))),
+            ("Final pool", str(result.get("n_final", len(clean_pool)))),
+            ("Dimer risks", str(issues.get("dimer_risks", 0))),
+            ("Size filtered", str(issues.get("size_filtered_short", 0) + issues.get("size_filtered_long", 0))),
+            ("Compatibility score", f"{result.get('compatibility_score', 0):.2f}"),
+        ]
+        for label, value in metrics:
+            card = self._make_metric_card(label, value)
+            metrics_layout.addWidget(card)
+        gl1.addLayout(metrics_layout)
+        layout.addWidget(group1)
+
+        if clean_pool:
+            group2 = QGroupBox(f"Clean Pool ({len(clean_pool)} loci)")
+            gl2 = QVBoxLayout(group2)
+            table = QTableWidget()
+            cols = ["SSR ID", "Contig", "Motif", "Product Size", "Fwd Tm", "Rev Tm", "Fwd Primer", "Rev Primer"]
+            show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+            if show_chromosome:
+                cols.insert(1, "Chromosome")
+            table.setColumnCount(len(cols))
+            table.setHorizontalHeaderLabels(cols)
+            table.setRowCount(min(len(clean_pool), 50))
+            for i, p in enumerate(clean_pool[:50]):
+                table.setItem(i, 0, QTableWidgetItem(str(p.get("ssr_id", ""))))
+                contig = p.get("contig", "")
+                if show_chromosome:
+                    table.setItem(i, 1, QTableWidgetItem(self.state.get_display_name(contig)))
+                    table.setItem(i, 2, QTableWidgetItem(contig))
+                    table.setItem(i, 3, QTableWidgetItem(p.get("motif", "")))
+                    table.setItem(i, 4, QTableWidgetItem(str(p.get("product_size", ""))))
+                    table.setItem(i, 5, QTableWidgetItem(f"{p.get('left_tm', 0):.1f}"))
+                    table.setItem(i, 6, QTableWidgetItem(f"{p.get('right_tm', 0):.1f}"))
+                    table.setItem(i, 7, QTableWidgetItem(p.get("left_primer", "")))
+                    table.setItem(i, 8, QTableWidgetItem(p.get("right_primer", "")))
+                else:
+                    table.setItem(i, 1, QTableWidgetItem(contig))
+                    table.setItem(i, 2, QTableWidgetItem(p.get("motif", "")))
+                    table.setItem(i, 3, QTableWidgetItem(str(p.get("product_size", ""))))
+                    table.setItem(i, 4, QTableWidgetItem(f"{p.get('left_tm', 0):.1f}"))
+                    table.setItem(i, 5, QTableWidgetItem(f"{p.get('right_tm', 0):.1f}"))
+                    table.setItem(i, 6, QTableWidgetItem(p.get("left_primer", "")))
+                    table.setItem(i, 7, QTableWidgetItem(p.get("right_primer", "")))
+            table.resizeColumnsToContents()
+            gl2.addWidget(table)
+            layout.addWidget(group2)
+
+        layout.addStretch()
+        self._tab_widget.addTab(tab, "Amplicon")
+
+    def _add_capillary_tab(self):
+        result = self.state.capillary_result
+        if not result:
+            return
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        assignments = result.get("assignments", [])
+        unassigned = result.get("unassigned", [])
+        n_total = result.get("n_total", 0)
+        n_assigned = result.get("n_assigned", len(assignments))
+
+        group1 = QGroupBox("Dye Assignment Summary")
+        gl1 = QVBoxLayout(group1)
+        metrics_layout = QHBoxLayout()
+        metrics = [
+            ("Total loci", str(n_total)),
+            ("Assigned", str(n_assigned)),
+            ("Unassigned", str(len(unassigned))),
+            ("Dyes used", str(len(set(a.get("dye", "") for a in assignments)))),
+        ]
+        for label, value in metrics:
+            card = self._make_metric_card(label, value)
+            metrics_layout.addWidget(card)
+        gl1.addLayout(metrics_layout)
+        layout.addWidget(group1)
+
+        if assignments:
+            group2 = QGroupBox(f"Assignments ({len(assignments)} loci)")
+            gl2 = QVBoxLayout(group2)
+            table = QTableWidget()
+            cols = ["SSR ID", "Dye", "Min Size", "Max Size", "Range", "Contig", "Fwd Primer", "Rev Primer"]
+            has_panels = any("panel" in a for a in assignments)
+            if has_panels:
+                cols.insert(0, "Panel")
+            show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+            if show_chromosome:
+                cols.insert(cols.index("Contig") + 1, "Chromosome")
+            table.setColumnCount(len(cols))
+            table.setHorizontalHeaderLabels(cols)
+            table.setRowCount(min(len(assignments), 50))
+            for i, a in enumerate(assignments[:50]):
+                col_idx = 0
+                if has_panels:
+                    table.setItem(i, col_idx, QTableWidgetItem(str(a.get("panel", ""))))
+                    col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(str(a.get("ssr_id", ""))))
+                col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(a.get("dye", "")))
+                col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(str(a.get("min_size", ""))))
+                col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(str(a.get("max_size", ""))))
+                col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(str(a.get("max_size", 0) - a.get("min_size", 0))))
+                col_idx += 1
+                contig = a.get("contig", "")
+                table.setItem(i, col_idx, QTableWidgetItem(contig))
+                col_idx += 1
+                if show_chromosome:
+                    chrom = self.state.get_display_name(contig)
+                    table.setItem(i, col_idx, QTableWidgetItem(chrom))
+                    col_idx += 1
+                fwd = a.get("left_primer", "")
+                rev = a.get("right_primer", "")
+                table.setItem(i, col_idx, QTableWidgetItem(fwd))
+                col_idx += 1
+                table.setItem(i, col_idx, QTableWidgetItem(rev))
+            table.resizeColumnsToContents()
+            gl2.addWidget(table)
+            layout.addWidget(group2)
+
+        layout.addStretch()
+        self._tab_widget.addTab(tab, "Capillary")
+
+    def _add_gbs_re_tab(self):
+        markers = self.state.gbs_re_markers
+        passing = self.state.gbs_re_passing_frags
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        group1 = QGroupBox("GBS‑RE Marker Discovery Summary")
+        gl1 = QVBoxLayout(group1)
+        metrics_layout = QHBoxLayout()
+        metrics = [
+            ("Qualified SSRs", f"{len(markers):,}"),
+            ("Passing fragments", f"{passing:,}"),
+            ("Unique contigs", f"{len(set(m.get('contig') for m in markers)):,}"),
+        ]
+        for label, value in metrics:
+            card = self._make_metric_card(label, value)
+            metrics_layout.addWidget(card)
+        gl1.addLayout(metrics_layout)
+        layout.addWidget(group1)
+
+        if markers:
+            group2 = QGroupBox(f"Markers ({len(markers)} loci)")
+            gl2 = QVBoxLayout(group2)
+            table = QTableWidget()
+            cols = ["SSR ID", "Contig", "Fragment Start", "Fragment End", "Fragment Size", "Motif"]
+            show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+            if show_chromosome:
+                cols.insert(1, "Chromosome")
+            table.setColumnCount(len(cols))
+            table.setHorizontalHeaderLabels(cols)
+            table.setRowCount(min(len(markers), 50))
+            for i, m in enumerate(markers[:50]):
+                table.setItem(i, 0, QTableWidgetItem(str(m.get("ssr_id", ""))))
+                contig = m.get("contig", "")
+                if show_chromosome:
+                    table.setItem(i, 1, QTableWidgetItem(self.state.get_display_name(contig)))
+                    table.setItem(i, 2, QTableWidgetItem(contig))
+                    table.setItem(i, 3, QTableWidgetItem(str(m.get("fragment_start", ""))))
+                    table.setItem(i, 4, QTableWidgetItem(str(m.get("fragment_end", ""))))
+                    table.setItem(i, 5, QTableWidgetItem(str(m.get("fragment_size", ""))))
+                    table.setItem(i, 6, QTableWidgetItem(m.get("motif", "")))
+                else:
+                    table.setItem(i, 1, QTableWidgetItem(contig))
+                    table.setItem(i, 2, QTableWidgetItem(str(m.get("fragment_start", ""))))
+                    table.setItem(i, 3, QTableWidgetItem(str(m.get("fragment_end", ""))))
+                    table.setItem(i, 4, QTableWidgetItem(str(m.get("fragment_size", ""))))
+                    table.setItem(i, 5, QTableWidgetItem(m.get("motif", "")))
+            table.resizeColumnsToContents()
+            gl2.addWidget(table)
+            layout.addWidget(group2)
+
+        layout.addStretch()
+        self._tab_widget.addTab(tab, "GBS‑RE")
+
+    def _make_metric_card(self, label, value):
+        card = QWidget()
+        card.setStyleSheet(f"background: {BG_MID}; border: 1px solid {BORDER}; border-radius: 6px; padding: 10px;")
+        cl = QVBoxLayout(card)
+        vl = QLabel(value)
+        vl.setFont(QFont(FONT_MONO, FONT_SIZE_LARGE, QFont.Weight.Bold))
+        vl.setStyleSheet(f"color: {ACCENT};")
+        cl.addWidget(vl)
+        cl.addWidget(QLabel(label))
+        return card
+
+    def _generate_pdf(self):
+        try:
+            import reportlab
+        except ImportError:
+            QMessageBox.warning(self, "Missing Library", "ReportLab is not installed. Run: pip install reportlab")
             return
 
-        self._placeholder.setVisible(False)
-        spec    = self.state.specificity_results or []
-        primers = self.state.primer_results or []
-        ssrs    = self.state.ssrs or []
+        if not self.state.has_ssrs:
+            QMessageBox.warning(self, "No Data", "No SSR data available.")
+            return
 
-        pass_ids = {r["ssr_id"] for r in spec if r.get("specificity_status") == "PASS"}
-        self._pass_primers = [p for p in primers if p.get("ssr_id") in pass_ids]
+        path, _ = QFileDialog.getSaveFileName(self, "Save PDF Report", "GRACE_report.pdf", "PDF files (*.pdf)")
+        if not path:
+            return
 
-        n_ssrs     = len(ssrs)
-        n_primers  = len(primers)
-        n_filtered = len(self.state.filtered_primer_results or primers)
-        n_spec     = len(spec)
-        n_pass     = len(pass_ids)
-        pass_rate  = n_pass / n_spec * 100 if n_spec else 0
+        if os.path.exists(path):
+            try:
+                with open(path, 'a') as f:
+                    pass
+            except PermissionError:
+                QMessageBox.warning(self, "File In Use", f"'{os.path.basename(path)}' is open in another program.\nPlease close it and try again.")
+                return
 
-        motif_counts = Counter(
-            p.get("canonical_motif", p.get("motif", "?")) for p in self._pass_primers
-        )
-        top_motif = motif_counts.most_common(1)[0][0] if motif_counts else "—"
-
-        # ── Key metric cards ──────────────────────────────
-        def _update_card(card, value):
-            card.findChild(QLabel).setText(value)
-
-        # Update value labels (first child = value label)
-        cards = [
-            (self._card_ssrs,    f"{n_ssrs:,}"),
-            (self._card_primers, f"{n_primers:,}"),
-            (self._card_pass,    f"{n_pass:,}"),
-            (self._card_rate,    f"{pass_rate:.1f}%"),
-            (self._card_motif,   top_motif),
-        ]
-        for card, val in cards:
-            labels = card.findChildren(QLabel)
-            if labels: labels[0].setText(val)
-        self._cards_widget.setVisible(True)
-
-        # ── Funnel ────────────────────────────────────────
-        self._funnel.set_stages([
-            ("SSRs Detected",        n_ssrs,     "#4C9BE8"),
-            ("Primers Designed",     n_primers,  "#9B89C4"),
-            ("After Quality Filter", n_filtered, "#F4A261"),
-            ("BLAST Tested",         n_spec,     "#48CAE4"),
-            ("PASS Markers",         n_pass,     "#56C596"),
-        ])
-        self._funnel_group.setVisible(True)
-
-        # ── SSR motif pie ─────────────────────────────────
-        if ssrs:
-            mlabels = {2:"Di",3:"Tri",4:"Tetra",5:"Penta",6:"Hexa"}
-            mc = Counter(len(s["motif"]) for s in ssrs)
-            self._motif_pie.set_data([
-                (mlabels.get(k,f"{k}bp"), v, CHART_COLOURS[i % len(CHART_COLOURS)])
-                for i,(k,v) in enumerate(sorted(mc.items()))
-            ])
-
-            if "genomic_feature" in ssrs[0]:
-                fc = Counter(s.get("genomic_feature","unknown") for s in ssrs)
-                self._feature_pie.set_data([
-                    (f.capitalize(), v, FEATURE_COLOURS.get(f,"#888888"))
-                    for f,v in sorted(fc.items(), key=lambda x:-x[1])
-                ])
-            else:
-                self._feature_pie.set_data([("No GFF loaded", 1, BORDER)])
-
-            self._ssr_charts_group.setVisible(True)
-
-        # ── PASS primer charts ────────────────────────────
-        if self._pass_primers:
-            pm = Counter(p.get("canonical_motif", p.get("motif","?")) for p in self._pass_primers)
-            top_n = pm.most_common(8)
-            self._pass_motif_pie.set_data([
-                (m, c, CHART_COLOURS[i % len(CHART_COLOURS)])
-                for i,(m,c) in enumerate(top_n)
-            ])
-
-            if "genomic_feature" in self._pass_primers[0]:
-                pfc = Counter(p.get("genomic_feature","unknown") for p in self._pass_primers)
-                self._pass_feature_pie.set_data([
-                    (f.capitalize(), v, FEATURE_COLOURS.get(f,"#888888"))
-                    for f,v in sorted(pfc.items(), key=lambda x:-x[1])
-                ])
-            else:
-                self._pass_feature_pie.set_data([("No annotation", 1, BORDER)])
-
-            # Product size bins
-            size_bins = defaultdict(int)
-            for p in self._pass_primers:
-                sz = p.get("product_size", 0)
-                if sz < 100:   size_bins["<100bp"]   += 1
-                elif sz < 150: size_bins["100–150bp"] += 1
-                elif sz < 200: size_bins["150–200bp"] += 1
-                elif sz < 250: size_bins["200–250bp"] += 1
-                elif sz < 300: size_bins["250–300bp"] += 1
-                else:          size_bins[">300bp"]    += 1
-            bin_order = ["<100bp","100–150bp","150–200bp","200–250bp","250–300bp",">300bp"]
-            self._product_bar.set_data([
-                (b, size_bins[b], CHART_COLOURS[i % len(CHART_COLOURS)])
-                for i,b in enumerate(bin_order) if size_bins[b]
-            ])
-            self._pass_charts_group.setVisible(True)
-
-        # ── Chromosome coverage ───────────────────────────
-        chrom_counts = Counter(p.get("contig","") for p in self._pass_primers)
-        if len(chrom_counts) <= 50:
-            top_chroms = chrom_counts.most_common(20)
-            self._chrom_bar.set_data([
-                (c[-12:], n, CHART_COLOURS[i % len(CHART_COLOURS)])
-                for i,(c,n) in enumerate(top_chroms)
-            ])
-            self._chrom_note.setText(
-                f"PASS markers distributed across {len(chrom_counts):,} "
-                f"sequence{'s' if len(chrom_counts)!=1 else ''}. "
-                f"Showing top {min(20,len(chrom_counts))}."
+        try:
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER
+            from reportlab.platypus import (
+                SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
             )
-            self._chrom_group.setVisible(True)
 
-        # ── GBS export button ─────────────────────────────
-        has_tails = self._pass_primers and "left_primer_tailed" in self._pass_primers[0]
-        self._gbs_export_btn.setVisible(has_tails)
+            doc = SimpleDocTemplate(path, pagesize=landscape(A4),
+                                    leftMargin=0.5*inch, rightMargin=0.5*inch,
+                                    topMargin=0.5*inch, bottomMargin=0.5*inch)
+            styles = getSampleStyleSheet()
+            story = []
 
-        self._export_group.setVisible(True)
-        self._populate_table()
-        self._table_group.setVisible(True)
+            header_style = ParagraphStyle(
+                'Header', parent=styles['Title'],
+                fontSize=28, textColor=colors.HexColor(ACCENT),
+                alignment=TA_CENTER, spaceAfter=6
+            )
+            story.append(Paragraph("GRACE Project Report", header_style))
+            date_style = ParagraphStyle(
+                'Date', parent=styles['Normal'],
+                fontSize=10, textColor=colors.grey, alignment=TA_CENTER, spaceAfter=30
+            )
+            story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", date_style))
 
-    def _populate_table(self):
-        primers   = self._pass_primers
-        truncated = len(primers) > TABLE_DISPLAY_LIMIT
-        display   = primers[:TABLE_DISPLAY_LIMIT] if truncated else primers
+            # SSR Summary
+            story.append(Paragraph("SSR Detection Summary", styles['Heading2']))
+            ssrs = self.state.ssrs
+            total = len(ssrs)
+            motifs = [s.get("canonical_motif", s.get("motif", "")) for s in ssrs]
+            motif_counts = Counter(motifs)
 
-        self._metrics_label.setText(
-            f"{len(primers):,} PASS primer pairs" +
-            (f"   |   showing first {TABLE_DISPLAY_LIMIT:,} — export for full data" if truncated else "")
-        )
+            data = [
+                ["Total SSRs", f"{total:,}"],
+                ["Unique motifs", f"{len(motif_counts):,}"],
+                ["Contigs with SSRs", f"{len(set(s.get('contig') for s in ssrs)):,}"],
+            ]
+            t = Table(data, colWidths=[2.5*inch, 2.5*inch])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,0), 12),
+                ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 0.3*inch))
 
-        has_feature = primers and "genomic_feature" in primers[0]
-        COLS = {
-            "ssr_id": "SSR ID", "pair_rank": "Pair", "contig": "Contig",
-            "motif": "Motif", "left_primer": "Forward primer",
-            "right_primer": "Reverse primer", "product_size": "Product (bp)",
-            "left_tm": "Fwd Tm", "right_tm": "Rev Tm",
-            "left_gc": "Fwd GC%", "right_gc": "Rev GC%",
-        }
-        if has_feature:
-            COLS["genomic_feature"] = "Feature"
+            motif_types = self._get_motif_type_counts(ssrs)
+            if motif_types:
+                story.append(Paragraph("Motif Type Distribution", styles['Heading3']))
+                motif_data = [["Motif Type", "Count", "Percentage"]]
+                for k, v in motif_types.items():
+                    motif_data.append([k, f"{v:,}", f"{v/total*100:.1f}%"])
+                t = Table(motif_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 0.2*inch))
 
-        display_cols = list(COLS.keys())
-        self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(display))
-        self._table.setColumnCount(len(display_cols))
-        self._table.setHorizontalHeaderLabels(list(COLS.values()))
+            top_motifs = motif_counts.most_common(10)
+            if top_motifs:
+                story.append(Paragraph("Top 10 Canonical Motifs", styles['Heading3']))
+                top_data = [["Motif", "Count"]]
+                for m, c in top_motifs:
+                    top_data.append([m, f"{c:,}"])
+                t = Table(top_data, colWidths=[2*inch, 2*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+                ]))
+                story.append(t)
 
-        header = self._table.horizontalHeader()
-        header.setStretchLastSection(True)
-        for ci, col in enumerate(display_cols):
-            if col == "contig":
-                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive)
-                self._table.setColumnWidth(ci, 160)
-            elif col in ("left_primer","right_primer"):
-                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.Interactive)
-                self._table.setColumnWidth(ci, 200)
-            else:
-                header.setSectionResizeMode(ci, QHeaderView.ResizeMode.ResizeToContents)
+            story.append(PageBreak())
 
-        for row_idx, p in enumerate(display):
-            for col_idx, col in enumerate(display_cols):
-                val  = p.get(col, "")
-                text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
-                self._table.setItem(row_idx, col_idx, QTableWidgetItem(text))
+            def make_table(headers, rows, col_widths):
+                data = [headers] + rows
+                t = Table(data, colWidths=col_widths, repeatRows=1)
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0,0), (-1,0), 8),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+                    ('FONTSIZE', (0,1), (-1,-1), 7),
+                    ('TEXTFONT', (0,1), (-1,-1), 'Courier'),
+                ]))
+                return t
 
-        self._table.setSortingEnabled(True)
+            # PASS Primers
+            pass_primers = self._get_blast_pass_primers()
+            if pass_primers:
+                story.append(Paragraph("PASS Primers (after BLAST)", styles['Heading2']))
+                show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+                headers = ["SSR ID", "Rank", "Contig"]
+                if show_chrom:
+                    headers.append("Chromosome")
+                headers.extend(["Motif", "Size", "Fwd Tm", "Rev Tm", "Fwd Primer", "Rev Primer"])
+                rows = []
+                for p in pass_primers:
+                    contig = p.get("contig", "")
+                    row = [str(p.get("ssr_id", "")), str(p.get("pair_rank", "")), contig[:20]]
+                    if show_chrom:
+                        row.append(self.state.get_display_name(contig))
+                    row.extend([p.get("motif", ""), str(p.get("product_size", "")),
+                                f"{p.get('left_tm', 0):.1f}", f"{p.get('right_tm', 0):.1f}",
+                                p.get("left_primer", ""), p.get("right_primer", "")])
+                    rows.append(row)
+                col_widths = [0.5*inch, 0.35*inch, 0.9*inch]
+                if show_chrom:
+                    col_widths.append(0.7*inch)
+                col_widths.extend([0.5*inch, 0.35*inch, 0.45*inch, 0.45*inch, 1.6*inch, 1.6*inch])
+                story.append(make_table(headers, rows, col_widths))
+                story.append(PageBreak())
 
-    # ---------------------------------------------------------
-    # EXPORTS
-    # ---------------------------------------------------------
-    def _export_pdf(self):
-        if not self._pass_primers: return
-        path, _ = QFileDialog.getSaveFileName(self, "Export PDF", "GRACE_report.pdf", "PDF files (*.pdf)")
-        if not path: return
-        self._pdf_btn.setEnabled(False)
-        self._set_export_status("Generating PDF...", TEXT_SECONDARY)
-        self._worker = PDFWorker(self._pass_primers, self.state, path)
-        self._worker.finished.connect(self._on_pdf_done)
-        self._worker.error.connect(self._on_pdf_error)
-        self._worker.start()
+            # Amplicon
+            if self.state.amplicon_validation_result:
+                result = self.state.amplicon_validation_result
+                story.append(Paragraph("Amplicon Panel Validation", styles['Heading2']))
+                clean_pool = result.get("clean_pool", [])
+                issues = result.get("issues_summary", {})
+                amplicon_data = [
+                    ["Metric", "Value"],
+                    ["Input loci", str(result.get("n_input", 0))],
+                    ["Passed checks", str(result.get("n_clean", 0))],
+                    ["Final pool", str(result.get("n_final", len(clean_pool)))],
+                    ["Dimer risks", str(issues.get("dimer_risks", 0))],
+                    ["Size filtered", str(issues.get("size_filtered_short", 0) + issues.get("size_filtered_long", 0))],
+                    ["Compatibility score", f"{result.get('compatibility_score', 0):.2f}"],
+                ]
+                t = Table(amplicon_data, colWidths=[2*inch, 2*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 0.2*inch))
 
-    def _on_pdf_done(self, path):
-        self._pdf_btn.setEnabled(True)
-        self._set_export_status(f"PDF saved to {path}", SUCCESS)
-        self.mw.set_status(f"Report saved to {path}")
-        self._worker = None
+                if clean_pool:
+                    story.append(Paragraph("Clean Pool Primers", styles['Heading3']))
+                    show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+                    headers = ["SSR ID", "Contig"]
+                    if show_chrom:
+                        headers.append("Chromosome")
+                    headers.extend(["Motif", "Size", "Fwd Tm", "Rev Tm", "Fwd Primer", "Rev Primer"])
+                    rows = []
+                    for p in clean_pool:
+                        contig = p.get("contig", "")
+                        row = [str(p.get("ssr_id", "")), contig[:20]]
+                        if show_chrom:
+                            row.append(self.state.get_display_name(contig))
+                        row.extend([p.get("motif", ""), str(p.get("product_size", "")),
+                                    f"{p.get('left_tm', 0):.1f}", f"{p.get('right_tm', 0):.1f}",
+                                    p.get("left_primer", ""), p.get("right_primer", "")])
+                        rows.append(row)
+                    col_widths = [0.5*inch, 0.9*inch]
+                    if show_chrom:
+                        col_widths.append(0.7*inch)
+                    col_widths.extend([0.5*inch, 0.35*inch, 0.45*inch, 0.45*inch, 1.6*inch, 1.6*inch])
+                    story.append(make_table(headers, rows, col_widths))
+                story.append(PageBreak())
 
-    def _on_pdf_error(self, msg):
-        self._pdf_btn.setEnabled(True)
-        self._set_export_status(f"PDF error: {msg}", ERROR)
-        self._worker = None
+            # Capillary
+            if self.state.capillary_result:
+                result = self.state.capillary_result
+                story.append(Paragraph("Capillary Panel Results", styles['Heading2']))
+                assignments = result.get("assignments", [])
+                cap_data = [
+                    ["Metric", "Value"],
+                    ["Total loci", str(result.get("n_total", 0))],
+                    ["Assigned", str(result.get("n_assigned", len(assignments)))],
+                    ["Unassigned", str(len(result.get("unassigned", [])))],
+                    ["Dyes used", str(len(set(a.get("dye", "") for a in assignments)))],
+                ]
+                t = Table(cap_data, colWidths=[2*inch, 2*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 0.2*inch))
 
-    def _export_csv(self):
-        if not self._pass_primers: return
-        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "GRACE_pass_primers.csv", "CSV files (*.csv)")
-        if not path: return
-        try:
-            import pandas as pd
-            pd.DataFrame(self._pass_primers).rename(columns={
-                "ssr_id":"SSR ID","pair_rank":"Pair rank","contig":"Contig",
-                "motif":"Motif","canonical_motif":"Canonical motif",
-                "repeat_count":"Repeat count","left_primer":"Forward primer",
-                "right_primer":"Reverse primer","product_size":"Product size (bp)",
-                "left_tm":"Forward Tm (°C)","right_tm":"Reverse Tm (°C)",
-                "left_gc":"Forward GC (%)","right_gc":"Reverse GC (%)",
-                "left_3end_dg":"Forward 3' stability (kcal/mol)",
-                "right_3end_dg":"Reverse 3' stability (kcal/mol)",
-                "genomic_feature":"Genomic feature",
-            }).to_csv(path, index=False, encoding="utf-8-sig")
-            self._set_export_status(f"CSV saved to {path}", SUCCESS)
-            self.mw.set_status(f"CSV saved to {path}")
+                if assignments:
+                    story.append(Paragraph("Dye Assignments", styles['Heading3']))
+                    show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+                    has_panels = any("panel" in a for a in assignments)
+                    headers = []
+                    if has_panels:
+                        headers.append("Panel")
+                    headers.extend(["SSR ID", "Dye", "Min", "Max", "Range", "Contig"])
+                    if show_chrom:
+                        headers.append("Chromosome")
+                    headers.extend(["Fwd Primer", "Rev Primer"])
+                    rows = []
+                    for a in assignments:
+                        contig = a.get("contig", "")
+                        row = []
+                        if has_panels:
+                            row.append(str(a.get("panel", "")))
+                        row.extend([
+                            str(a.get("ssr_id", "")),
+                            a.get("dye", ""),
+                            str(a.get("min_size", "")),
+                            str(a.get("max_size", "")),
+                            str(a.get("max_size", 0) - a.get("min_size", 0)),
+                            contig[:20],
+                        ])
+                        if show_chrom:
+                            row.append(self.state.get_display_name(contig))
+                        row.extend([a.get("left_primer", ""), a.get("right_primer", "")])
+                        rows.append(row)
+                    col_widths = []
+                    if has_panels:
+                        col_widths.append(0.4*inch)
+                    col_widths.extend([0.5*inch, 0.5*inch, 0.35*inch, 0.35*inch, 0.35*inch, 0.9*inch])
+                    if show_chrom:
+                        col_widths.append(0.7*inch)
+                    col_widths.extend([1.5*inch, 1.5*inch])
+                    story.append(make_table(headers, rows, col_widths))
+                story.append(PageBreak())
+
+            # GBS-RE
+            if self.state.gbs_re_markers:
+                markers = self.state.gbs_re_markers
+                story.append(Paragraph("GBS‑RE Marker Discovery", styles['Heading2']))
+                gbs_data = [
+                    ["Metric", "Value"],
+                    ["Qualified SSRs", f"{len(markers):,}"],
+                    ["Passing fragments", f"{self.state.gbs_re_passing_frags:,}"],
+                    ["Unique contigs", f"{len(set(m.get('contig') for m in markers)):,}"],
+                ]
+                t = Table(gbs_data, colWidths=[2*inch, 2*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 0.2*inch))
+
+                if markers:
+                    story.append(Paragraph("Qualified Markers", styles['Heading3']))
+                    show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+                    headers = ["SSR ID", "Contig"]
+                    if show_chrom:
+                        headers.append("Chromosome")
+                    headers.extend(["Fragment Start", "Fragment End", "Size", "Motif"])
+                    rows = []
+                    for m in markers:
+                        contig = m.get("contig", "")
+                        row = [str(m.get("ssr_id", "")), contig[:20]]
+                        if show_chrom:
+                            row.append(self.state.get_display_name(contig))
+                        row.extend([
+                            str(m.get("fragment_start", "")),
+                            str(m.get("fragment_end", "")),
+                            str(m.get("fragment_size", "")),
+                            m.get("motif", ""),
+                        ])
+                        rows.append(row)
+                    col_widths = [0.5*inch, 1.0*inch]
+                    if show_chrom:
+                        col_widths.append(0.7*inch)
+                    col_widths.extend([0.7*inch, 0.7*inch, 0.5*inch, 0.7*inch])
+                    story.append(make_table(headers, rows, col_widths))
+
+            doc.build(story)
+            self._status_label.setText(f"PDF report saved to {path}")
+            self.mw.set_status("PDF report generated")
+
         except Exception as e:
-            self._set_export_status(f"CSV error: {e}", ERROR)
-
-    def _export_fasta(self):
-        if not self._pass_primers: return
-        path, _ = QFileDialog.getSaveFileName(self, "Export FASTA", "GRACE_pass_primers.fasta", "FASTA files (*.fasta *.fa)")
-        if not path: return
-        try:
-            from core.primer_design import primers_to_blast_fasta
-            with open(path, "w") as f:
-                f.write(primers_to_blast_fasta(self._pass_primers))
-            self._set_export_status(f"FASTA saved to {path}", SUCCESS)
-            self.mw.set_status(f"FASTA saved to {path}")
-        except Exception as e:
-            self._set_export_status(f"FASTA error: {e}", ERROR)
-
-    def _export_gbs_fasta(self):
-        if not self._pass_primers: return
-        path, _ = QFileDialog.getSaveFileName(self, "Export GBS FASTA", "GRACE_pass_gbs_tailed.fasta", "FASTA files (*.fasta *.fa)")
-        if not path: return
-        try:
-            from core.primer_design import primers_to_gbs_fasta
-            with open(path, "w") as f:
-                f.write(primers_to_gbs_fasta(self._pass_primers))
-            self._set_export_status(f"GBS FASTA saved to {path}", SUCCESS)
-            self.mw.set_status(f"GBS FASTA saved to {path}")
-        except Exception as e:
-            self._set_export_status(f"GBS FASTA error: {e}", ERROR)
-
-    def _set_export_status(self, msg, color):
-        self._export_status.setText(msg)
-        self._export_status.setStyleSheet(f"color: {color}; font-size: {FONT_SIZE_SMALL}pt;")
+            QMessageBox.critical(self, "PDF Generation Failed", str(e))
 
     def on_show(self):
-        if self.state.blast_version != self._last_version:
-            self._last_version = self.state.blast_version
-            self._rebuild()
+        self._refresh()

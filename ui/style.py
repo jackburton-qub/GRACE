@@ -33,9 +33,8 @@ FONT_MONO = "IBM Plex Mono"
 
 # Font size presets — base size drives all other sizes proportionally
 FONT_PRESETS = {
-    "Small":  {"normal": 8,  "small": 7,  "large": 10, "title": 13},
-    "Medium": {"normal": 9,  "small": 8,  "large": 11, "title": 14},
-    "Large":  {"normal": 11, "small": 10, "large": 13, "title": 16},
+    "Medium": {"normal": 11,  "small": 10,  "large": 13, "title": 16},
+    "Large":  {"normal": 13, "small": 12, "large": 15, "title": 18},
 }
 FONT_SIZE_PRESET_DEFAULT = "Medium"
 

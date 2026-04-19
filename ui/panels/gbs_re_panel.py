@@ -1,26 +1,26 @@
 """
 gbs_re_panel.py — GBS-RE Marker Discovery
 Identify SSRs within restriction fragments for traditional GBS.
-Includes LD filter, chromosome view, and multi-enzyme comparison.
+Includes Chromosome column when GFF mapping is available.
 """
 
 import os
-import math
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QScrollArea, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QSpinBox,
     QComboBox, QCheckBox, QApplication, QTextEdit, QProgressBar,
-    QSplitter, QTabWidget, QListWidget, QListWidgetItem, QSizePolicy
+    QTabWidget, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF, QPointF
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF
 from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor
 
 from ui.style import (
     ACCENT, SUCCESS, ERROR, WARNING, TEXT_SECONDARY, TEXT_PRIMARY,
-    FONT_UI, FONT_MONO, FONT_SIZE_NORMAL, FONT_SIZE_LARGE,
-    FONT_SIZE_SMALL, PANEL_PADDING, BG_MID, BG_LIGHT, BORDER,
+    FONT_UI, FONT_MONO, FONT_SIZE_LARGE, FONT_SIZE_SMALL, PANEL_PADDING,
+    BG_MID, BG_LIGHT, BORDER,
 )
+
 
 def _lbl(text, tip=None):
     w = QLabel(text)
@@ -34,8 +34,8 @@ class ChromosomeView(QWidget):
     """Visualize marker positions across contigs."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._markers = []          # list of (contig, start, end) for all markers
-        self._filtered_markers = [] # after LD filter (if applied)
+        self._markers = []
+        self._filtered_markers = []
         self._show_filtered = False
         self._contig_lengths = {}
         self.setMinimumHeight(200)
@@ -52,7 +52,11 @@ class ChromosomeView(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        if not self._markers and not self._filtered_markers:
+        markers_to_show = self._filtered_markers if self._show_filtered else self._markers
+        if not markers_to_show:
+            painter = QPainter(self)
+            painter.setPen(QColor(TEXT_SECONDARY))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No markers to display")
             return
 
         painter = QPainter(self)
@@ -60,21 +64,13 @@ class ChromosomeView(QWidget):
         w, h = self.width(), self.height()
         margin_left, margin_right, margin_top, margin_bottom = 100, 20, 20, 30
 
-        # Group markers by contig
         by_contig = {}
-        markers_to_show = self._filtered_markers if self._show_filtered else self._markers
         for m in markers_to_show:
             contig = m.get("contig", "")
             if contig not in by_contig:
                 by_contig[contig] = []
             by_contig[contig].append(m)
 
-        if not by_contig:
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No markers to display")
-            return
-
-        # Get contig lengths if available, else estimate from max position
         contigs = list(by_contig.keys())
         contig_lengths = {}
         for contig in contigs:
@@ -84,11 +80,7 @@ class ChromosomeView(QWidget):
                 max_pos = max(m.get("start", 0) for m in by_contig[contig])
                 contig_lengths[contig] = max_pos + 1000
 
-        # Sort contigs by length (largest first) or alphabetically
-        contigs = sorted(contigs, key=lambda c: contig_lengths.get(c, 0), reverse=True)
-        # Take top 8 contigs to keep view manageable
-        contigs = contigs[:8]
-
+        contigs = sorted(contigs, key=lambda c: contig_lengths.get(c, 0), reverse=True)[:8]
         n_contigs = len(contigs)
         row_height = (h - margin_top - margin_bottom) / max(n_contigs, 1)
         bar_height = row_height * 0.6
@@ -100,27 +92,22 @@ class ChromosomeView(QWidget):
             y = margin_top + i * row_height + (row_height - bar_height) / 2
             contig_len = contig_lengths[contig]
 
-            # Draw contig label
             painter.drawText(5, int(y + bar_height/2 + 4), contig[:15])
 
-            # Draw chromosome bar
             bar_x = margin_left
             bar_w = w - margin_left - margin_right
             painter.setBrush(QBrush(QColor(BG_MID)))
             painter.setPen(QPen(QColor(BORDER), 1))
             painter.drawRect(bar_x, int(y), int(bar_w), int(bar_height))
 
-            # Draw markers
-            markers = by_contig[contig]
             painter.setBrush(QBrush(QColor(ACCENT)))
             painter.setPen(Qt.PenStyle.NoPen)
-            for m in markers:
+            for m in by_contig[contig]:
                 pos = m.get("start", 0)
                 if contig_len > 0:
                     rel_x = bar_x + (pos / contig_len) * bar_w
                     painter.drawEllipse(QPointF(rel_x, y + bar_height/2), 3, 3)
 
-            # Draw scale tick
             painter.setPen(QColor(TEXT_SECONDARY))
             painter.drawText(bar_x, int(y + bar_height + 12), "0")
             painter.drawText(bar_x + bar_w - 30, int(y + bar_height + 12), f"{contig_len/1000:.1f} kb")
@@ -186,7 +173,6 @@ class MultiEnzymeWorker(QThread):
                     max_fragment_size=self.max_frag,
                     min_distance_from_end=self.min_end_dist,
                 )
-                # Compute median fragment size
                 frag_sizes = res.get("passing_fragment_sizes", [])
                 median_size = sorted(frag_sizes)[len(frag_sizes)//2] if frag_sizes else 0
                 results.append({
@@ -230,8 +216,8 @@ class GBSREPanel(QWidget):
         self._barcode_worker = None
         self._multi_worker = None
         self._qualified_ssrs = []
-        self._all_markers = []      # for chromosome view
-        self._contig_lengths = {}   # from genome
+        self._all_markers = []
+        self._contig_lengths = {}
         self._build_ui()
         self._compute_contig_lengths()
 
@@ -268,7 +254,6 @@ class GBSREPanel(QWidget):
         L.addWidget(title)
         L.addWidget(sub)
 
-        # Enzyme selection
         enzyme_group = QGroupBox("Enzyme Selection")
         eg = QVBoxLayout(enzyme_group)
         row1 = QHBoxLayout()
@@ -286,7 +271,6 @@ class GBSREPanel(QWidget):
 
         L.addWidget(enzyme_group)
 
-        # Fragment size filter
         frag_group = QGroupBox("Fragment Size Filter")
         fg = QVBoxLayout(frag_group)
         row2 = QHBoxLayout()
@@ -309,7 +293,6 @@ class GBSREPanel(QWidget):
         row2.addWidget(self._min_end_dist_spin)
         fg.addLayout(row2)
 
-        # LD filter
         ld_row = QHBoxLayout()
         self._ld_filter_cb = QCheckBox("Apply LD filter (thin markers by distance)")
         self._ld_filter_cb.setChecked(False)
@@ -327,7 +310,6 @@ class GBSREPanel(QWidget):
 
         L.addWidget(frag_group)
 
-        # Action buttons
         btn_row = QHBoxLayout()
         self._run_btn = QPushButton("Discover GBS Markers")
         self._run_btn.setObjectName("primary")
@@ -349,11 +331,9 @@ class GBSREPanel(QWidget):
         self._status_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         L.addWidget(self._status_label)
 
-        # Tabs for results and chromosome view
         self._tab_widget = QTabWidget()
         self._tab_widget.setVisible(False)
 
-        # Results tab
         results_tab = QWidget()
         rt_layout = QVBoxLayout(results_tab)
         self._summary_label = QLabel("")
@@ -378,7 +358,6 @@ class GBSREPanel(QWidget):
 
         self._tab_widget.addTab(results_tab, "Markers")
 
-        # Chromosome view tab
         chrom_tab = QWidget()
         ct_layout = QVBoxLayout(chrom_tab)
         self._chromosome_view = ChromosomeView()
@@ -394,7 +373,6 @@ class GBSREPanel(QWidget):
 
         L.addWidget(self._tab_widget)
 
-        # Barcode section
         self._barcode_group = QGroupBox("Sample Barcodes")
         self._barcode_group.setVisible(False)
         bg = QVBoxLayout(self._barcode_group)
@@ -445,9 +423,7 @@ class GBSREPanel(QWidget):
         label = QLabel("Choose enzyme combinations:")
         layout.addWidget(label)
 
-        # Common single enzymes
         single_enzymes = ["PstI", "MspI", "ApeKI", "MseI", "SbfI", "EcoRI", "HindIII", "TaqI", "NlaIII"]
-        # Common double digests
         double_combos = [("PstI", "MspI"), ("PstI", "ApeKI"), ("MspI", "ApeKI"), ("SbfI", "MspI")]
         checkboxes = {}
         for enz in single_enzymes:
@@ -474,7 +450,6 @@ class GBSREPanel(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        # Gather selected combos
         combos = []
         for key, cb in checkboxes.items():
             if cb.isChecked():
@@ -486,7 +461,6 @@ class GBSREPanel(QWidget):
         if not combos:
             return
 
-        # Run comparison
         self._multi_worker = MultiEnzymeWorker(
             self.state.ssrs,
             self.state.genome,
@@ -503,7 +477,6 @@ class GBSREPanel(QWidget):
 
     def _show_comparison_results(self, results, dialog):
         dialog.close()
-        # Display in a new dialog with table
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QPushButton
         dlg = QDialog(self)
         dlg.setWindowTitle("Enzyme Comparison Results")
@@ -513,7 +486,6 @@ class GBSREPanel(QWidget):
         table.setColumnCount(5)
         table.setHorizontalHeaderLabels(["Enzyme(s)", "Qualified SSRs", "Passing Fragments", "Median Fragment", "Rank"])
         table.setRowCount(len(results))
-        # Sort by qualified SSRs descending
         results = sorted(results, key=lambda x: x["n_qualified"], reverse=True)
         for i, r in enumerate(results):
             table.setItem(i, 0, QTableWidgetItem(r["display"]))
@@ -564,11 +536,6 @@ class GBSREPanel(QWidget):
 
     def _on_discovery_done(self, result):
         qualified = result["qualified_ssrs"]
-        # Build all markers list for chromosome view
-        self._all_markers = []
-        for ssr in self.state.ssrs:
-            self._all_markers.append({"contig": ssr.get("contig"), "start": ssr.get("start", 0)})
-
         if self._ld_filter_cb.isChecked():
             from core.ld_filter import thin_markers_by_distance
             qualified = thin_markers_by_distance(qualified, self._ld_distance_spin.value())
@@ -576,6 +543,8 @@ class GBSREPanel(QWidget):
             result["n_qualified"] = len(qualified)
 
         self._qualified_ssrs = qualified
+        self.state.gbs_re_markers = qualified
+        self.state.gbs_re_passing_frags = result["passing_fragments"]
         self._progress_bar.setVisible(False)
         self._run_btn.setEnabled(True)
         self._status_label.setText("Discovery complete.")
@@ -588,7 +557,10 @@ class GBSREPanel(QWidget):
         )
 
         self._populate_table(self._qualified_ssrs)
-        # Update chromosome view
+
+        self._all_markers = []
+        for ssr in self.state.ssrs:
+            self._all_markers.append({"contig": ssr.get("contig"), "start": ssr.get("start", 0)})
         filtered_markers = [{"contig": m.get("contig"), "start": m.get("start")} for m in qualified]
         self._chromosome_view.set_data(self._all_markers, filtered_markers, self._contig_lengths)
         self._chromosome_view.set_show_filtered(self._ld_filter_cb.isChecked())
@@ -604,15 +576,29 @@ class GBSREPanel(QWidget):
             return
         self._results_table.setRowCount(len(ssrs))
         cols = ["SSR ID", "Contig", "Motif", "Fragment Start", "Fragment End", "Fragment Size"]
+        # Add Chromosome after Contig if mapping exists
+        show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
+        if show_chromosome:
+            cols.insert(1, "Chromosome")
+
         self._results_table.setColumnCount(len(cols))
         self._results_table.setHorizontalHeaderLabels(cols)
         for i, s in enumerate(ssrs):
             self._results_table.setItem(i, 0, QTableWidgetItem(str(s.get("ssr_id"))))
-            self._results_table.setItem(i, 1, QTableWidgetItem(s.get("contig", "")))
-            self._results_table.setItem(i, 2, QTableWidgetItem(s.get("motif", "")))
-            self._results_table.setItem(i, 3, QTableWidgetItem(str(s.get("fragment_start", ""))))
-            self._results_table.setItem(i, 4, QTableWidgetItem(str(s.get("fragment_end", ""))))
-            self._results_table.setItem(i, 5, QTableWidgetItem(str(s.get("fragment_size", ""))))
+            contig = s.get("contig", "")
+            if show_chromosome:
+                self._results_table.setItem(i, 1, QTableWidgetItem(self.state.get_display_name(contig)))
+                self._results_table.setItem(i, 2, QTableWidgetItem(contig))
+                self._results_table.setItem(i, 3, QTableWidgetItem(s.get("motif", "")))
+                self._results_table.setItem(i, 4, QTableWidgetItem(str(s.get("fragment_start", ""))))
+                self._results_table.setItem(i, 5, QTableWidgetItem(str(s.get("fragment_end", ""))))
+                self._results_table.setItem(i, 6, QTableWidgetItem(str(s.get("fragment_size", ""))))
+            else:
+                self._results_table.setItem(i, 1, QTableWidgetItem(contig))
+                self._results_table.setItem(i, 2, QTableWidgetItem(s.get("motif", "")))
+                self._results_table.setItem(i, 3, QTableWidgetItem(str(s.get("fragment_start", ""))))
+                self._results_table.setItem(i, 4, QTableWidgetItem(str(s.get("fragment_end", ""))))
+                self._results_table.setItem(i, 5, QTableWidgetItem(str(s.get("fragment_size", ""))))
         self._results_table.resizeColumnsToContents()
 
     def _generate_barcodes(self):
@@ -641,7 +627,10 @@ class GBSREPanel(QWidget):
         if not path:
             return
         import pandas as pd
-        pd.DataFrame(self._qualified_ssrs).to_csv(path, index=False)
+        df = pd.DataFrame(self._qualified_ssrs)
+        if hasattr(self.state, 'get_display_name') and "contig" in df.columns:
+            df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
+        df.to_csv(path, index=False)
         self.mw.set_status(f"Markers exported to {path}")
 
     def _export_bed(self):

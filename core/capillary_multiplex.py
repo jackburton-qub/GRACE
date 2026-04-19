@@ -2,11 +2,11 @@
 capillary_multiplex.py
 ----------------------
 Advanced dye assignment and size binning for capillary multiplex panels.
+Supports splitting into multiple panels (injections).
 """
 
 from typing import List, Dict, Any, Tuple, Optional
 
-# Standard dye sets
 DYE_SETS = {
     "1 Dye (FAM)": ["FAM"],
     "2 Dyes (FAM, VIC)": ["FAM", "VIC"],
@@ -29,15 +29,12 @@ def assign_dyes_advanced(
     allow_overlap_within_dye: bool = False,
     overlap_tolerance: int = 0,
 ) -> Dict[str, Any]:
-    """
-    Assign loci to dyes to maximize panel size while avoiding size overlap.
-    """
+    """Assign loci to dyes within a single panel."""
     sorted_loci = sorted(
         loci,
         key=lambda x: (x["max_allele_size"] - x["min_allele_size"]),
         reverse=True
     )
-
     dye_bins = {dye: [] for dye in dye_set}
     unassigned = []
 
@@ -49,7 +46,6 @@ def assign_dyes_advanced(
         for dye in dye_set:
             if max_loci_per_dye and len(dye_bins[dye]) >= max_loci_per_dye:
                 continue
-
             conflict = False
             for (b_min, b_max, _) in dye_bins[dye]:
                 if allow_overlap_within_dye:
@@ -61,12 +57,10 @@ def assign_dyes_advanced(
                     if _overlaps((loc_min, loc_max), (b_min, b_max), min_bin_spacing):
                         conflict = True
                         break
-
             if not conflict:
                 dye_bins[dye].append((loc_min, loc_max, locus["ssr_id"]))
                 assigned = True
                 break
-
         if not assigned:
             unassigned.append(locus["ssr_id"])
 
@@ -87,6 +81,82 @@ def assign_dyes_advanced(
         "n_total": len(loci),
         "n_assigned": len(assignments),
         "n_unassigned": len(unassigned),
+    }
+
+
+def assign_to_panels(
+    loci: List[Dict[str, Any]],
+    dye_set: List[str],
+    max_panels: Optional[int] = None,
+    max_loci_per_panel: Optional[int] = None,
+    min_bin_spacing: int = 5,
+    max_loci_per_dye: Optional[int] = None,
+    allow_overlap: bool = False,
+    overlap_tolerance: int = 0,
+) -> Dict[str, Any]:
+    """
+    Assign loci to panels (injections), then within each panel assign dyes.
+    If neither max_panels nor max_loci_per_panel is provided, returns a single panel.
+    """
+    if max_panels is None and max_loci_per_panel is None:
+        result = assign_dyes_advanced(
+            loci, dye_set,
+            min_bin_spacing=min_bin_spacing,
+            max_loci_per_dye=max_loci_per_dye,
+            allow_overlap_within_dye=allow_overlap,
+            overlap_tolerance=overlap_tolerance,
+        )
+        for a in result["assignments"]:
+            a["panel"] = 1
+        result["n_panels"] = 1
+        return result
+
+    # Sort loci by size range
+    sorted_loci = sorted(loci, key=lambda x: (x["min_allele_size"], x["max_allele_size"]))
+    panels = []  # each panel is a dict with 'loci' list
+
+    for locus in sorted_loci:
+        placed = False
+        for panel_idx, panel in enumerate(panels):
+            if max_loci_per_panel and len(panel["loci"]) >= max_loci_per_panel:
+                continue
+            conflict = False
+            for existing in panel["loci"]:
+                if not (locus["max_allele_size"] + min_bin_spacing < existing["min_allele_size"] or
+                        existing["max_allele_size"] + min_bin_spacing < locus["min_allele_size"]):
+                    conflict = True
+                    break
+            if not conflict:
+                panel["loci"].append(locus)
+                placed = True
+                break
+        if not placed:
+            if max_panels and len(panels) >= max_panels:
+                continue
+            panels.append({"loci": [locus]})
+
+    all_assignments = []
+    all_unassigned = []
+    for panel_idx, panel in enumerate(panels, start=1):
+        panel_result = assign_dyes_advanced(
+            panel["loci"], dye_set,
+            min_bin_spacing=min_bin_spacing,
+            max_loci_per_dye=max_loci_per_dye,
+            allow_overlap_within_dye=allow_overlap,
+            overlap_tolerance=overlap_tolerance,
+        )
+        for a in panel_result["assignments"]:
+            a["panel"] = panel_idx
+            all_assignments.append(a)
+        all_unassigned.extend(panel_result["unassigned"])
+
+    return {
+        "assignments": all_assignments,
+        "n_panels": len(panels),
+        "n_total": len(loci),
+        "n_assigned": len(all_assignments),
+        "n_unassigned": len(all_unassigned),
+        "unassigned": all_unassigned,
     }
 
 
@@ -125,7 +195,6 @@ def suggest_best_panel(
 
 
 def filter_unique_loci(primers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep only the best primer pair per SSR (lowest pair_rank)."""
     if not primers:
         return []
     import pandas as pd
