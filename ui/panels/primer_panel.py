@@ -496,38 +496,68 @@ class PrimerPanel(QWidget):
             self._filter_updating = False
 
     def _apply_filters(self):
-        if not self.state.primer_results: return
+        if not self.state.primer_results:
+            return
         import pandas as pd
+
         try:
-            dg_min, dg_max = float(self.dg_min.value()), float(self.dg_max.value())
-            clamp_lo, clamp_hi = int(self.clamp_min.value()), int(self.clamp_max.value())
+            dg_min   = float(self.dg_min.value())
+            dg_max   = float(self.dg_max.value())
+            clamp_lo = int(self.clamp_min.value())
+            clamp_hi = int(self.clamp_max.value())
         except Exception:
             return
-        if dg_min > dg_max: dg_min, dg_max = dg_max, dg_min
-        if clamp_lo > clamp_hi: clamp_lo, clamp_hi = clamp_hi, clamp_lo
+
+        if dg_min > dg_max:
+            dg_min, dg_max = dg_max, dg_min
+        if clamp_lo > clamp_hi:
+            clamp_lo, clamp_hi = clamp_hi, clamp_lo
 
         df = pd.DataFrame(self.state.primer_results)
         total = len(df)
-        if "left_3end_dg" in df.columns:
-            mask = df["left_3end_dg"].between(dg_min, dg_max) & df["right_3end_dg"].between(dg_min, dg_max)
-            df = df[mask].copy()
-        if "left_primer" in df.columns and not df.empty:
-            def _gc_clamp(seq):
-                try: return sum(1 for b in str(seq)[-5:].upper() if b in "GC")
-                except: return 0
-            df["left_gc_clamp"]  = df["left_primer"].map(_gc_clamp)
-            df["right_gc_clamp"] = df["right_primer"].map(_gc_clamp)
-            df = df[df["left_gc_clamp"].between(clamp_lo, clamp_hi) & df["right_gc_clamp"].between(clamp_lo, clamp_hi)].copy()
 
+        # 3' stability filter
+        if "left_3end_dg" in df.columns and "right_3end_dg" in df.columns:
+            mask = (
+                df["left_3end_dg"].between(dg_min, dg_max) &
+                df["right_3end_dg"].between(dg_min, dg_max)
+            )
+            df = df[mask].copy()
+
+        # GC clamp filter (only if primers exist and DataFrame not empty)
+        if "left_primer" in df.columns and "right_primer" in df.columns and not df.empty:
+            def _gc_clamp(seq):
+                try:
+                    s = str(seq) if seq is not None else ""
+                    return sum(1 for b in s[-5:].upper() if b in "GC")
+                except Exception:
+                    return 0
+
+            # Use .loc to avoid SettingWithCopyWarning
+            df = df.copy()
+            df["left_gc_clamp"] = df["left_primer"].apply(_gc_clamp)
+            df["right_gc_clamp"] = df["right_primer"].apply(_gc_clamp)
+
+            mask = (
+                df["left_gc_clamp"].between(clamp_lo, clamp_hi) &
+                df["right_gc_clamp"].between(clamp_lo, clamp_hi)
+            )
+            df = df[mask].copy()
+
+        # Update filtered results
         if df.empty:
             self.state.filtered_primer_results = self.state.primer_results
-            self.filter_status.setText("No primers pass filters — using full set")
-            self.filter_status.setStyleSheet(f"color: {WARNING};")
+            self.filter_status.setText("No primers pass current filters — using full set for BLAST")
+            self.filter_status.setStyleSheet(f"color: {WARNING}; font-size: {FONT_SIZE_SMALL}pt;")
         else:
             self.state.filtered_primer_results = df.to_dict(orient="records")
             removed = total - len(df)
-            self.filter_status.setText(f"{removed} removed — {len(df)} remaining" if removed else f"All {len(df)} pass")
-            self.filter_status.setStyleSheet(f"color: {WARNING if removed else SUCCESS};")
+            if removed > 0:
+                self.filter_status.setText(f"{removed:,} pairs removed — {len(df):,} remaining")
+                self.filter_status.setStyleSheet(f"color: {WARNING}; font-size: {FONT_SIZE_SMALL}pt;")
+            else:
+                self.filter_status.setText(f"All {len(df):,} pairs pass filters")
+                self.filter_status.setStyleSheet(f"color: {SUCCESS}; font-size: {FONT_SIZE_SMALL}pt;")
 
     def _refresh(self):
         if not self.state.has_genome or not self.state.has_ssrs:
