@@ -27,11 +27,6 @@ from ui.panels.ssr_summary_panel import SSRSummaryPanel
 from ui.panels.primer_panel      import PrimerPanel
 from ui.panels.specificity_panel import SpecificityPanel
 from ui.panels.results_panel     import ResultsPanel
-from ui.panels.report_panel      import ReportPanel
-from ui.panels.amplicon_panel    import AmpliconPanel
-from ui.panels.capillary_panel   import CapillaryPanel
-from ui.panels.gbs_re_panel      import GBSREPanel
-
 
 STEPS = [
     (0,  "01  Load Genome"),
@@ -40,10 +35,6 @@ STEPS = [
     (3,  "04  Design Primers"),
     (4,  "05  Check Specificity"),
     (5,  "06  BLAST Results"),
-    (6,  "07  Final Report"),
-    (7,  "08  Amplicon Tools"),
-    (8,  "09  Capillary Tools"),
-    (9,  "10  GBS‑RE Tools"),
 ]
 
 
@@ -175,16 +166,10 @@ class MainWindow(QMainWindow):
         self.primer_panel      = PrimerPanel(self.state, self)
         self.specificity_panel = SpecificityPanel(self.state, self)
         self.results_panel     = ResultsPanel(self.state, self)
-        self.report_panel      = ReportPanel(self.state, self)
-        self.amplicon_panel    = AmpliconPanel(self.state, self)
-        self.capillary_panel   = CapillaryPanel(self.state, self)
-        self.gbs_re_panel      = GBSREPanel(self.state, self)
 
         for panel in [
             self.home_panel, self.ssr_panel, self.ssr_summary_panel,
             self.primer_panel, self.specificity_panel, self.results_panel,
-            self.report_panel, self.amplicon_panel, self.capillary_panel,
-            self.gbs_re_panel,
         ]:
             self.stack.addWidget(panel)
 
@@ -231,10 +216,6 @@ class MainWindow(QMainWindow):
             s.has_primers,      # 3 Design Primers
             s.has_specificity,  # 4 Check Specificity
             s.has_specificity,  # 5 BLAST Results
-            s.has_specificity,  # 6 Final Report
-            s.has_specificity and is_amplicon,   # 7 Amplicon Tools
-            s.has_specificity and is_capillary,  # 8 Capillary Tools
-            s.has_genome and s.has_ssrs,         # 9 GBS‑RE Tools
         ]
 
         for i, (_, label) in enumerate(STEPS):

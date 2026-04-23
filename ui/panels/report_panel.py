@@ -478,33 +478,73 @@ class ReportPanel(QWidget):
         try:
             from reportlab.lib.pagesizes import A4, landscape
             from reportlab.lib import colors
-            from reportlab.lib.units import inch
+            from reportlab.lib.units import inch, mm
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
             from reportlab.platypus import (
-                SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+                SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+                PageBreak, PageTemplate, Frame, NextPageTemplate
             )
+            from reportlab.pdfgen import canvas
+
+            # ------------------------------------------------------------------
+            # Custom page template with header and footer
+            # ------------------------------------------------------------------
+            def header_footer(canvas_obj, doc):
+                canvas_obj.saveState()
+                w, h = landscape(A4)
+
+                # Header line
+                canvas_obj.setStrokeColor(colors.HexColor(ACCENT))
+                canvas_obj.setLineWidth(1)
+                canvas_obj.line(doc.leftMargin, h - 0.6*inch, w - doc.rightMargin, h - 0.6*inch)
+
+                # Header text
+                canvas_obj.setFont("Helvetica-Bold", 14)
+                canvas_obj.setFillColor(colors.HexColor(ACCENT))
+                canvas_obj.drawString(doc.leftMargin, h - 0.4*inch, "GRACE Project Report")
+
+                # Footer
+                canvas_obj.setFont("Helvetica", 8)
+                canvas_obj.setFillColor(colors.grey)
+                canvas_obj.drawString(doc.leftMargin, 0.4*inch, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                canvas_obj.drawRightString(w - doc.rightMargin, 0.4*inch, f"Page {doc.page}")
+
+                canvas_obj.restoreState()
 
             doc = SimpleDocTemplate(path, pagesize=landscape(A4),
-                                    leftMargin=0.5*inch, rightMargin=0.5*inch,
-                                    topMargin=0.5*inch, bottomMargin=0.5*inch)
+                                    leftMargin=0.6*inch, rightMargin=0.6*inch,
+                                    topMargin=0.8*inch, bottomMargin=0.8*inch)
+            
+            # Use the custom template
+            frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
+            template = PageTemplate(id='header_footer', frames=[frame], onPage=header_footer)
+            doc.addPageTemplates([template])
+
             styles = getSampleStyleSheet()
             story = []
 
-            header_style = ParagraphStyle(
-                'Header', parent=styles['Title'],
-                fontSize=28, textColor=colors.HexColor(ACCENT),
-                alignment=TA_CENTER, spaceAfter=6
+            # Custom styles
+            title_style = ParagraphStyle(
+                'Title', parent=styles['Title'],
+                fontSize=18, textColor=colors.HexColor(ACCENT),
+                alignment=TA_LEFT, spaceAfter=12
             )
-            story.append(Paragraph("GRACE Project Report", header_style))
-            date_style = ParagraphStyle(
-                'Date', parent=styles['Normal'],
-                fontSize=10, textColor=colors.grey, alignment=TA_CENTER, spaceAfter=30
+            heading2_style = ParagraphStyle(
+                'Heading2', parent=styles['Heading2'],
+                fontSize=14, textColor=colors.HexColor(ACCENT),
+                spaceBefore=16, spaceAfter=8, keepWithNext=True
             )
-            story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", date_style))
+            heading3_style = ParagraphStyle(
+                'Heading3', parent=styles['Heading3'],
+                fontSize=12, textColor=colors.HexColor(ACCENT),
+                spaceBefore=12, spaceAfter=6, keepWithNext=True
+            )
 
-            # SSR Summary
-            story.append(Paragraph("SSR Detection Summary", styles['Heading2']))
+            # ------------------------------------------------------------------
+            # SSR Summary Section
+            # ------------------------------------------------------------------
+            story.append(Paragraph("SSR Detection Summary", heading2_style))
             ssrs = self.state.ssrs
             total = len(ssrs)
             motifs = [s.get("canonical_motif", s.get("motif", "")) for s in ssrs]
@@ -521,17 +561,18 @@ class ReportPanel(QWidget):
                 ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,0), 12),
-                ('BOTTOMPADDING', (0,0), (-1,0), 10),
-                ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                ('FONTSIZE', (0,0), (-1,0), 11),
+                ('BOTTOMPADDING', (0,0), (-1,0), 8),
+                ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#F5F5F5")),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
             ]))
             story.append(t)
             story.append(Spacer(1, 0.3*inch))
 
+            # Motif distribution
             motif_types = self._get_motif_type_counts(ssrs)
             if motif_types:
-                story.append(Paragraph("Motif Type Distribution", styles['Heading3']))
+                story.append(Paragraph("Motif Type Distribution", heading3_style))
                 motif_data = [["Motif Type", "Count", "Percentage"]]
                 for k, v in motif_types.items():
                     motif_data.append([k, f"{v:,}", f"{v/total*100:.1f}%"])
@@ -541,15 +582,17 @@ class ReportPanel(QWidget):
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+                    ('FONTSIZE', (0,0), (-1,0), 10),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
                 ]))
                 story.append(t)
                 story.append(Spacer(1, 0.2*inch))
 
+            # Top motifs
             top_motifs = motif_counts.most_common(10)
             if top_motifs:
-                story.append(Paragraph("Top 10 Canonical Motifs", styles['Heading3']))
+                story.append(Paragraph("Top 10 Canonical Motifs", heading3_style))
                 top_data = [["Motif", "Count"]]
                 for m, c in top_motifs:
                     top_data.append([m, f"{c:,}"])
@@ -559,34 +602,41 @@ class ReportPanel(QWidget):
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+                    ('FONTSIZE', (0,0), (-1,0), 10),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
                 ]))
                 story.append(t)
 
+            story.append(NextPageTemplate('header_footer'))
             story.append(PageBreak())
 
-            def make_table(headers, rows, col_widths):
+            # ------------------------------------------------------------------
+            # Helper for data tables
+            # ------------------------------------------------------------------
+            def make_data_table(headers, rows, col_widths, header_color=colors.HexColor(ACCENT)):
                 data = [headers] + rows
                 t = Table(data, colWidths=col_widths, repeatRows=1)
                 t.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor(ACCENT)),
+                    ('BACKGROUND', (0,0), (-1,0), header_color),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0,0), (-1,0), 8),
+                    ('FONTSIZE', (0,0), (-1,0), 9),
                     ('BOTTOMPADDING', (0,0), (-1,0), 6),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-                    ('FONTSIZE', (0,1), (-1,-1), 7),
-                    ('TEXTFONT', (0,1), (-1,-1), 'Courier'),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#F9F9F9")]),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#DDDDDD")),
+                    ('FONTSIZE', (0,1), (-1,-1), 8),
                 ]))
                 return t
 
+            # ------------------------------------------------------------------
             # PASS Primers
+            # ------------------------------------------------------------------
             pass_primers = self._get_blast_pass_primers()
             if pass_primers:
-                story.append(Paragraph("PASS Primers (after BLAST)", styles['Heading2']))
+                story.append(Paragraph("PASS Primers (after BLAST)", heading2_style))
                 show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
                 headers = ["SSR ID", "Rank", "Contig"]
                 if show_chrom:
@@ -606,13 +656,16 @@ class ReportPanel(QWidget):
                 if show_chrom:
                     col_widths.append(0.7*inch)
                 col_widths.extend([0.5*inch, 0.35*inch, 0.45*inch, 0.45*inch, 1.6*inch, 1.6*inch])
-                story.append(make_table(headers, rows, col_widths))
+                story.append(make_data_table(headers, rows, col_widths))
+                story.append(NextPageTemplate('header_footer'))
                 story.append(PageBreak())
 
-            # Amplicon
+            # ------------------------------------------------------------------
+            # Amplicon Section
+            # ------------------------------------------------------------------
             if self.state.amplicon_validation_result:
                 result = self.state.amplicon_validation_result
-                story.append(Paragraph("Amplicon Panel Validation", styles['Heading2']))
+                story.append(Paragraph("Amplicon Panel Validation", heading2_style))
                 clean_pool = result.get("clean_pool", [])
                 issues = result.get("issues_summary", {})
                 amplicon_data = [
@@ -630,15 +683,15 @@ class ReportPanel(QWidget):
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 8),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
                 ]))
                 story.append(t)
                 story.append(Spacer(1, 0.2*inch))
 
                 if clean_pool:
-                    story.append(Paragraph("Clean Pool Primers", styles['Heading3']))
+                    story.append(Paragraph("Clean Pool Primers", heading3_style))
                     show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
                     headers = ["SSR ID", "Contig"]
                     if show_chrom:
@@ -658,13 +711,16 @@ class ReportPanel(QWidget):
                     if show_chrom:
                         col_widths.append(0.7*inch)
                     col_widths.extend([0.5*inch, 0.35*inch, 0.45*inch, 0.45*inch, 1.6*inch, 1.6*inch])
-                    story.append(make_table(headers, rows, col_widths))
+                    story.append(make_data_table(headers, rows, col_widths))
+                story.append(NextPageTemplate('header_footer'))
                 story.append(PageBreak())
 
-            # Capillary
+            # ------------------------------------------------------------------
+            # Capillary Section
+            # ------------------------------------------------------------------
             if self.state.capillary_result:
                 result = self.state.capillary_result
-                story.append(Paragraph("Capillary Panel Results", styles['Heading2']))
+                story.append(Paragraph("Capillary Panel Results", heading2_style))
                 assignments = result.get("assignments", [])
                 cap_data = [
                     ["Metric", "Value"],
@@ -679,21 +735,21 @@ class ReportPanel(QWidget):
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 8),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
                 ]))
                 story.append(t)
                 story.append(Spacer(1, 0.2*inch))
 
                 if assignments:
-                    story.append(Paragraph("Dye Assignments", styles['Heading3']))
+                    story.append(Paragraph("Dye Assignments", heading3_style))
                     show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
                     has_panels = any("panel" in a for a in assignments)
                     headers = []
                     if has_panels:
                         headers.append("Panel")
-                    headers.extend(["SSR ID", "Dye", "Min", "Max", "Range", "Contig"])
+                    headers.extend(["SSR ID", "Dye", "Min", "Max", "Range", "Motif", "Contig"])
                     if show_chrom:
                         headers.append("Chromosome")
                     headers.extend(["Fwd Primer", "Rev Primer"])
@@ -709,6 +765,7 @@ class ReportPanel(QWidget):
                             str(a.get("min_size", "")),
                             str(a.get("max_size", "")),
                             str(a.get("max_size", 0) - a.get("min_size", 0)),
+                            a.get("motif", ""),
                             contig[:20],
                         ])
                         if show_chrom:
@@ -718,17 +775,20 @@ class ReportPanel(QWidget):
                     col_widths = []
                     if has_panels:
                         col_widths.append(0.4*inch)
-                    col_widths.extend([0.5*inch, 0.5*inch, 0.35*inch, 0.35*inch, 0.35*inch, 0.9*inch])
+                    col_widths.extend([0.5*inch, 0.5*inch, 0.35*inch, 0.35*inch, 0.35*inch, 0.5*inch, 0.9*inch])
                     if show_chrom:
                         col_widths.append(0.7*inch)
                     col_widths.extend([1.5*inch, 1.5*inch])
-                    story.append(make_table(headers, rows, col_widths))
+                    story.append(make_data_table(headers, rows, col_widths))
+                story.append(NextPageTemplate('header_footer'))
                 story.append(PageBreak())
 
-            # GBS-RE
+            # ------------------------------------------------------------------
+            # GBS-RE Section
+            # ------------------------------------------------------------------
             if self.state.gbs_re_markers:
                 markers = self.state.gbs_re_markers
-                story.append(Paragraph("GBS‑RE Marker Discovery", styles['Heading2']))
+                story.append(Paragraph("GBS‑RE Marker Discovery", heading2_style))
                 gbs_data = [
                     ["Metric", "Value"],
                     ["Qualified SSRs", f"{len(markers):,}"],
@@ -741,15 +801,15 @@ class ReportPanel(QWidget):
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('BOTTOMPADDING', (0,0), (-1,0), 10),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 8),
+                    ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
                 ]))
                 story.append(t)
                 story.append(Spacer(1, 0.2*inch))
 
                 if markers:
-                    story.append(Paragraph("Qualified Markers", styles['Heading3']))
+                    story.append(Paragraph("Qualified Markers", heading3_style))
                     show_chrom = hasattr(self.state, 'get_display_name') and self.state.chrom_names
                     headers = ["SSR ID", "Contig"]
                     if show_chrom:
@@ -772,7 +832,7 @@ class ReportPanel(QWidget):
                     if show_chrom:
                         col_widths.append(0.7*inch)
                     col_widths.extend([0.7*inch, 0.7*inch, 0.5*inch, 0.7*inch])
-                    story.append(make_table(headers, rows, col_widths))
+                    story.append(make_data_table(headers, rows, col_widths))
 
             doc.build(story)
             self._status_label.setText(f"PDF report saved to {path}")

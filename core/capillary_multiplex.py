@@ -2,7 +2,7 @@
 capillary_multiplex.py
 ----------------------
 Advanced dye assignment and size binning for capillary multiplex panels.
-Supports splitting into multiple panels (injections).
+Fills panels sequentially, maximizing density and using all dyes.
 """
 
 from typing import List, Dict, Any, Tuple, Optional
@@ -28,8 +28,11 @@ def assign_dyes_advanced(
     max_loci_per_dye: Optional[int] = None,
     allow_overlap_within_dye: bool = False,
     overlap_tolerance: int = 0,
-) -> Dict[str, Any]:
-    """Assign loci to dyes within a single panel."""
+) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, List[Tuple[int, int]]]]:
+    """
+    Assign loci to dyes within a single panel.
+    Returns (assignments, unassigned, dye_bins).
+    """
     sorted_loci = sorted(
         loci,
         key=lambda x: (x["max_allele_size"] - x["min_allele_size"]),
@@ -41,8 +44,9 @@ def assign_dyes_advanced(
     for locus in sorted_loci:
         loc_min = locus["min_allele_size"]
         loc_max = locus["max_allele_size"]
-        assigned = False
+        ssr_id = locus["ssr_id"]
 
+        candidates = []
         for dye in dye_set:
             if max_loci_per_dye and len(dye_bins[dye]) >= max_loci_per_dye:
                 continue
@@ -58,11 +62,13 @@ def assign_dyes_advanced(
                         conflict = True
                         break
             if not conflict:
-                dye_bins[dye].append((loc_min, loc_max, locus["ssr_id"]))
-                assigned = True
-                break
-        if not assigned:
-            unassigned.append(locus["ssr_id"])
+                candidates.append(dye)
+
+        if candidates:
+            best_dye = min(candidates, key=lambda d: len(dye_bins[d]))
+            dye_bins[best_dye].append((loc_min, loc_max, ssr_id))
+        else:
+            unassigned.append(ssr_id)
 
     assignments = []
     for dye in dye_set:
@@ -74,88 +80,67 @@ def assign_dyes_advanced(
                 "max_size": b_max,
             })
 
-    return {
-        "assignments": assignments,
-        "unassigned": unassigned,
-        "dye_bins": {dye: [(bmin, bmax) for (bmin, bmax, _) in bins] for dye, bins in dye_bins.items()},
-        "n_total": len(loci),
-        "n_assigned": len(assignments),
-        "n_unassigned": len(unassigned),
-    }
+    return assignments, unassigned, {dye: [(bmin, bmax) for (bmin, bmax, _) in bins] for dye, bins in dye_bins.items()}
 
 
-def assign_to_panels(
+def assign_to_panels_sequential(
     loci: List[Dict[str, Any]],
     dye_set: List[str],
-    max_panels: Optional[int] = None,
-    max_loci_per_panel: Optional[int] = None,
+    max_panels: int = 1,
     min_bin_spacing: int = 5,
     max_loci_per_dye: Optional[int] = None,
     allow_overlap: bool = False,
     overlap_tolerance: int = 0,
 ) -> Dict[str, Any]:
     """
-    Assign loci to panels (injections), then within each panel assign dyes.
-    If neither max_panels nor max_loci_per_panel is provided, returns a single panel.
+    Fill Panel 1 completely, then Panel 2, etc.
     """
-    if max_panels is None and max_loci_per_panel is None:
-        result = assign_dyes_advanced(
-            loci, dye_set,
-            min_bin_spacing=min_bin_spacing,
-            max_loci_per_dye=max_loci_per_dye,
-            allow_overlap_within_dye=allow_overlap,
-            overlap_tolerance=overlap_tolerance,
-        )
-        for a in result["assignments"]:
-            a["panel"] = 1
-        result["n_panels"] = 1
-        return result
-
-    # Sort loci by size range
-    sorted_loci = sorted(loci, key=lambda x: (x["min_allele_size"], x["max_allele_size"]))
-    panels = []  # each panel is a dict with 'loci' list
-
-    for locus in sorted_loci:
-        placed = False
-        for panel_idx, panel in enumerate(panels):
-            if max_loci_per_panel and len(panel["loci"]) >= max_loci_per_panel:
-                continue
-            conflict = False
-            for existing in panel["loci"]:
-                if not (locus["max_allele_size"] + min_bin_spacing < existing["min_allele_size"] or
-                        existing["max_allele_size"] + min_bin_spacing < locus["min_allele_size"]):
-                    conflict = True
-                    break
-            if not conflict:
-                panel["loci"].append(locus)
-                placed = True
-                break
-        if not placed:
-            if max_panels and len(panels) >= max_panels:
-                continue
-            panels.append({"loci": [locus]})
-
-    all_assignments = []
+    remaining_loci = list(loci)  # copy
+    panels_assignments = []
+    panels_dye_bins = []
     all_unassigned = []
-    for panel_idx, panel in enumerate(panels, start=1):
-        panel_result = assign_dyes_advanced(
-            panel["loci"], dye_set,
+
+    for panel_idx in range(1, max_panels + 1):
+        if not remaining_loci:
+            break
+
+        assignments, unassigned, dye_bins = assign_dyes_advanced(
+            remaining_loci, dye_set,
             min_bin_spacing=min_bin_spacing,
             max_loci_per_dye=max_loci_per_dye,
             allow_overlap_within_dye=allow_overlap,
             overlap_tolerance=overlap_tolerance,
         )
-        for a in panel_result["assignments"]:
+
+        if not assignments:
+            # No loci could be placed in this panel; stop trying further panels
+            all_unassigned.extend([loc["ssr_id"] for loc in remaining_loci])
+            break
+
+        # Tag assignments with panel number
+        for a in assignments:
             a["panel"] = panel_idx
-            all_assignments.append(a)
-        all_unassigned.extend(panel_result["unassigned"])
+        panels_assignments.append(assignments)
+        panels_dye_bins.append(dye_bins)
+
+        # Remove assigned loci from remaining
+        assigned_ids = {a["ssr_id"] for a in assignments}
+        remaining_loci = [loc for loc in remaining_loci if loc["ssr_id"] not in assigned_ids]
+        all_unassigned.extend(unassigned)
+
+    # Build result
+    all_assignments = []
+    panels_dict = {}
+    for i, assigns in enumerate(panels_assignments, start=1):
+        panels_dict[i] = assigns
+        all_assignments.extend(assigns)
 
     return {
         "assignments": all_assignments,
-        "n_panels": len(panels),
+        "panels": panels_dict,
+        "n_panels": len(panels_assignments),
         "n_total": len(loci),
         "n_assigned": len(all_assignments),
-        "n_unassigned": len(all_unassigned),
         "unassigned": all_unassigned,
     }
 
@@ -176,19 +161,21 @@ def suggest_best_panel(
 
     for spacing in min_spacing_options:
         for max_per_dye in max_per_dye_options:
-            result = assign_dyes_advanced(
+            assignments, unassigned, _ = assign_dyes_advanced(
                 loci=loci,
                 dye_set=dye_set,
                 min_bin_spacing=spacing,
                 max_loci_per_dye=max_per_dye if max_per_dye > 0 else None,
                 allow_overlap_within_dye=False,
             )
-            if result["n_assigned"] > best_n_assigned:
-                best_n_assigned = result["n_assigned"]
-                best_result = result
-                best_result["best_params"] = {
-                    "min_bin_spacing": spacing,
-                    "max_loci_per_dye": max_per_dye,
+            if len(assignments) > best_n_assigned:
+                best_n_assigned = len(assignments)
+                best_result = {
+                    "assignments": assignments,
+                    "unassigned": unassigned,
+                    "n_assigned": len(assignments),
+                    "n_total": len(loci),
+                    "best_params": {"min_bin_spacing": spacing, "max_loci_per_dye": max_per_dye},
                 }
 
     return best_result

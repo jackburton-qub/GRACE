@@ -20,7 +20,7 @@ from ui.style import (
     FONT_UI, FONT_MONO, FONT_SIZE_NORMAL, FONT_SIZE_LARGE,
     FONT_SIZE_SMALL, PANEL_PADDING, BG_MID, BG_LIGHT, BORDER,
 )
-from core.capillary_multiplex import DYE_SETS, filter_unique_loci, assign_dyes_advanced
+from core.capillary_multiplex import DYE_SETS, filter_unique_loci, assign_dyes_advanced, assign_to_panels_sequential
 
 
 def _lbl(text, tip=None):
@@ -186,13 +186,8 @@ class CapillaryWorker(QThread):
 
             loci = []
             for p in unique_primers:
-                if self.params.get("use_narrow_range", True):
-                    ref_count = p.get("repeat_count", 10)
-                    min_rep = max(1, ref_count - 2)
-                    max_rep = ref_count + 2
-                else:
-                    min_rep = self.params["min_repeats"]
-                    max_rep = self.params["max_repeats"]
+                min_rep = self.params["min_repeats"]
+                max_rep = self.params["max_repeats"]
 
                 sizing = calculate_allele_sizes(p, min_repeats=min_rep, max_repeats=max_rep)
                 loci.append({
@@ -205,76 +200,35 @@ class CapillaryWorker(QThread):
             dye_set_name = self.params["dye_set"]
             dye_list = DYE_SETS[dye_set_name]
 
-            max_panels = self.params.get("max_panels")
-            max_loci_per_panel = self.params.get("max_loci_per_panel")
-            if max_panels == 0:
-                max_panels = None
-            if max_loci_per_panel == 0:
-                max_loci_per_panel = None
+            max_panels = self.params.get("max_panels", 1)
 
-            # --- FIXED: Always use the full dye_list for every panel ---
-            if max_panels is None and max_loci_per_panel is None:
-                # Single panel
-                result = assign_dyes_advanced(
+            if max_panels is None or max_panels <= 1:
+                assignments, unassigned, dye_bins = assign_dyes_advanced(
                     loci, dye_list,
                     min_bin_spacing=self.params["min_buffer"],
                     max_loci_per_dye=self.params.get("max_per_dye"),
                     allow_overlap_within_dye=self.params.get("allow_overlap", False),
                     overlap_tolerance=self.params.get("overlap_tolerance", 0),
                 )
-                for a in result["assignments"]:
+                for a in assignments:
                     a["panel"] = 1
-                result["panels"] = {1: result["assignments"]}
-                result["n_panels"] = 1
-            else:
-                # Multiple panels – split loci first, then assign ALL dyes to each panel
-                sorted_loci = sorted(loci, key=lambda x: (x["min_allele_size"], x["max_allele_size"]))
-                panels_loci = []
-
-                for locus in sorted_loci:
-                    placed = False
-                    for panel_loci in panels_loci:
-                        if max_loci_per_panel and len(panel_loci) >= max_loci_per_panel:
-                            continue
-                        conflict = False
-                        for existing in panel_loci:
-                            if not (locus["max_allele_size"] + self.params["min_buffer"] < existing["min_allele_size"] or
-                                    existing["max_allele_size"] + self.params["min_buffer"] < locus["min_allele_size"]):
-                                conflict = True
-                                break
-                        if not conflict:
-                            panel_loci.append(locus)
-                            placed = True
-                            break
-                    if not placed:
-                        if max_panels and len(panels_loci) >= max_panels:
-                            continue
-                        panels_loci.append([locus])
-
-                all_assignments = []
-                panels_dict = {}
-                for panel_idx, panel_loci in enumerate(panels_loci, start=1):
-                    # Assign ALL available dyes to this panel's loci
-                    panel_result = assign_dyes_advanced(
-                        panel_loci, dye_list,
-                        min_bin_spacing=self.params["min_buffer"],
-                        max_loci_per_dye=self.params.get("max_per_dye"),
-                        allow_overlap_within_dye=self.params.get("allow_overlap", False),
-                        overlap_tolerance=self.params.get("overlap_tolerance", 0),
-                    )
-                    for a in panel_result["assignments"]:
-                        a["panel"] = panel_idx
-                        all_assignments.append(a)
-                    panels_dict[panel_idx] = panel_result["assignments"]
-
                 result = {
-                    "assignments": all_assignments,
-                    "panels": panels_dict,
-                    "n_panels": len(panels_loci),
+                    "assignments": assignments,
+                    "panels": {1: assignments},
+                    "n_panels": 1,
                     "n_total": len(loci),
-                    "n_assigned": len(all_assignments),
-                    "unassigned": [loc["ssr_id"] for loc in loci if not any(a["ssr_id"] == loc["ssr_id"] for a in all_assignments)],
+                    "n_assigned": len(assignments),
+                    "unassigned": unassigned,
                 }
+            else:
+                result = assign_to_panels_sequential(
+                    loci, dye_list,
+                    max_panels=max_panels,
+                    min_bin_spacing=self.params["min_buffer"],
+                    max_loci_per_dye=self.params.get("max_per_dye"),
+                    allow_overlap=self.params.get("allow_overlap", False),
+                    overlap_tolerance=self.params.get("overlap_tolerance", 0),
+                )
 
             locus_map = {loc["ssr_id"]: loc["primer"] for loc in loci}
             for a in result["assignments"]:
@@ -282,64 +236,6 @@ class CapillaryWorker(QThread):
 
             result["unique_loci_used"] = len(loci)
             self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class SuggestWorker(QThread):
-    finished = pyqtSignal(dict)
-    error = pyqtSignal(str)
-
-    def __init__(self, primers, params):
-        super().__init__()
-        self.primers = primers
-        self.params = params
-
-    def run(self):
-        try:
-            from core.capillary_multiplex import suggest_best_panel, DYE_SETS, filter_unique_loci
-            from core.amplicon_sizing import calculate_allele_sizes
-
-            unique_primers = filter_unique_loci(self.primers)
-
-            loci = []
-            for p in unique_primers:
-                if self.params.get("use_narrow_range", True):
-                    ref_count = p.get("repeat_count", 10)
-                    min_rep = max(1, ref_count - 2)
-                    max_rep = ref_count + 2
-                else:
-                    min_rep = self.params["min_repeats"]
-                    max_rep = self.params["max_repeats"]
-
-                sizing = calculate_allele_sizes(p, min_repeats=min_rep, max_repeats=max_rep)
-                loci.append({
-                    "ssr_id": p["ssr_id"],
-                    "min_allele_size": sizing["min_allele_size"],
-                    "max_allele_size": sizing["max_allele_size"],
-                    "primer": p,
-                })
-
-            dye_set_name = self.params["dye_set"]
-            dye_list = DYE_SETS[dye_set_name]
-
-            best = suggest_best_panel(
-                loci,
-                dye_list,
-                min_spacing_options=self.params["spacings"],
-                max_per_dye_options=self.params["max_per_dye_options"],
-            )
-
-            locus_map = {loc["ssr_id"]: loc["primer"] for loc in loci}
-            for a in best["assignments"]:
-                a.update(locus_map[a["ssr_id"]])
-                a["panel"] = 1
-
-            best["suggested"] = True
-            best["unique_loci_used"] = len(loci)
-            best["n_panels"] = 1
-            best["panels"] = {1: best["assignments"]}
-            self.finished.emit(best)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -367,9 +263,6 @@ class CapillaryPanel(QWidget):
 
     def _toggle_ld_filter(self, checked):
         self._ld_distance_spin.setEnabled(checked)
-
-    def _toggle_panel_options(self, checked):
-        self._panel_opts_widget.setVisible(checked)
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -432,11 +325,6 @@ class CapillaryPanel(QWidget):
         self._max_per_dye_spin.setToolTip("Limit number of loci per dye (0 = unlimited)")
         basic_layout.addWidget(self._max_per_dye_spin, 2, 1)
 
-        self._use_narrow_cb = QCheckBox("Use narrow allele range (±2 repeats around reference)")
-        self._use_narrow_cb.setChecked(True)
-        self._use_narrow_cb.setToolTip("Reduces overlap by using conservative allele size estimates")
-        basic_layout.addWidget(self._use_narrow_cb, 3, 0, 1, 2)
-
         mg.addWidget(basic_group)
 
         # ---- Advanced Settings ----
@@ -453,7 +341,7 @@ class CapillaryPanel(QWidget):
         adv_layout.addWidget(QLabel("Max expected repeats:"), 0, 2)
         self._max_repeats_spin = QSpinBox()
         self._max_repeats_spin.setRange(10, 200)
-        self._max_repeats_spin.setValue(20)
+        self._max_repeats_spin.setValue(40)
         adv_layout.addWidget(self._max_repeats_spin, 0, 3)
 
         self._allow_overlap_cb = QCheckBox("Allow overlapping bins within same dye")
@@ -475,28 +363,17 @@ class CapillaryPanel(QWidget):
         panel_layout = QVBoxLayout(panel_group)
 
         self._split_panels_cb = QCheckBox("Split into multiple panels")
-        self._split_panels_cb.setChecked(False)
-        self._split_panels_cb.toggled.connect(self._toggle_panel_options)
+        self._split_panels_cb.setChecked(True)
         panel_layout.addWidget(self._split_panels_cb)
 
         panel_opts = QHBoxLayout()
-        panel_opts.addWidget(QLabel("Max panels:"))
-        self._max_panels_spin = QSpinBox()
-        self._max_panels_spin.setRange(1, 10)
-        self._max_panels_spin.setValue(2)
-        panel_opts.addWidget(self._max_panels_spin)
-
-        panel_opts.addWidget(QLabel("Or max loci per panel:"))
-        self._max_per_panel_spin = QSpinBox()
-        self._max_per_panel_spin.setRange(1, 100)
-        self._max_per_panel_spin.setValue(20)
-        panel_opts.addWidget(self._max_per_panel_spin)
+        panel_opts.addWidget(QLabel("Number of panels:"))
+        self._num_panels_spin = QSpinBox()
+        self._num_panels_spin.setRange(1, 10)
+        self._num_panels_spin.setValue(2)
+        panel_opts.addWidget(self._num_panels_spin)
         panel_opts.addStretch()
-
-        self._panel_opts_widget = QWidget()
-        self._panel_opts_widget.setLayout(panel_opts)
-        self._panel_opts_widget.setVisible(False)
-        panel_layout.addWidget(self._panel_opts_widget)
+        panel_layout.addLayout(panel_opts)
 
         mg.addWidget(panel_group)
 
@@ -531,11 +408,6 @@ class CapillaryPanel(QWidget):
         self._run_btn.setObjectName("primary")
         self._run_btn.clicked.connect(self._run_assignment)
         btn_layout.addWidget(self._run_btn)
-
-        self._suggest_btn = QPushButton("Suggest Best Panel")
-        self._suggest_btn.clicked.connect(self._run_suggestion)
-        btn_layout.addWidget(self._suggest_btn)
-
         btn_layout.addStretch()
         mg.addLayout(btn_layout)
 
@@ -545,7 +417,6 @@ class CapillaryPanel(QWidget):
 
         L.addWidget(self._main_group)
 
-        # Main tab widget for results
         self._main_tab_widget = QTabWidget()
         self._main_tab_widget.setVisible(False)
         L.addWidget(self._main_tab_widget)
@@ -558,7 +429,6 @@ class CapillaryPanel(QWidget):
             return
 
         self._run_btn.setEnabled(False)
-        self._suggest_btn.setEnabled(False)
         self._status_label.setText("Assigning dyes...")
         QApplication.processEvents()
 
@@ -571,42 +441,15 @@ class CapillaryPanel(QWidget):
             "overlap_tolerance": self._overlap_tolerance_spin.value(),
             "min_repeats": self._min_repeats_spin.value(),
             "max_repeats": self._max_repeats_spin.value(),
-            "use_narrow_range": self._use_narrow_cb.isChecked(),
         }
 
         if self._split_panels_cb.isChecked():
-            params["max_panels"] = self._max_panels_spin.value()
-            params["max_loci_per_panel"] = self._max_per_panel_spin.value()
+            params["max_panels"] = self._num_panels_spin.value()
         else:
             params["max_panels"] = None
-            params["max_loci_per_panel"] = None
 
         self._worker = CapillaryWorker(self._pass_primers, params)
         self._worker.finished.connect(self._on_assignment_done)
-        self._worker.error.connect(self._on_assignment_error)
-        self._worker.start()
-
-    def _run_suggestion(self):
-        if not self._pass_primers:
-            self._status_label.setText("No PASS primers available.")
-            return
-
-        self._run_btn.setEnabled(False)
-        self._suggest_btn.setEnabled(False)
-        self._status_label.setText("Trying parameter combinations...")
-        QApplication.processEvents()
-
-        params = {
-            "dye_set": self._dye_set_combo.currentText(),
-            "min_repeats": self._min_repeats_spin.value(),
-            "max_repeats": self._max_repeats_spin.value(),
-            "use_narrow_range": self._use_narrow_cb.isChecked(),
-            "spacings": [5, 8, 10, 12, 15],
-            "max_per_dye_options": [10, 15, 20, 25, 0],
-        }
-
-        self._worker = SuggestWorker(self._pass_primers, params)
-        self._worker.finished.connect(self._on_suggestion_done)
         self._worker.error.connect(self._on_assignment_error)
         self._worker.start()
 
@@ -620,16 +463,7 @@ class CapillaryPanel(QWidget):
         self._result = result
         self.state.capillary_result = result
         self._run_btn.setEnabled(True)
-        self._suggest_btn.setEnabled(True)
         self._status_label.setText("Assignment complete.")
-        self._display_results(result)
-
-    def _on_suggestion_done(self, result):
-        self._result = result
-        self.state.capillary_result = result
-        self._run_btn.setEnabled(True)
-        self._suggest_btn.setEnabled(True)
-        self._status_label.setText("Suggestion complete.")
         self._display_results(result)
 
     def _display_results(self, result):
@@ -639,7 +473,7 @@ class CapillaryPanel(QWidget):
         panels = result.get("panels", {1: result["assignments"]})
         n_panels = result.get("n_panels", 1)
 
-        # Summary tab
+        # Summary tab with export button
         summary_tab = QWidget()
         summary_layout = QVBoxLayout(summary_tab)
         unique_total = result.get("unique_loci_used", result["n_total"])
@@ -651,6 +485,10 @@ class CapillaryPanel(QWidget):
         summary_label.setWordWrap(True)
         summary_label.setStyleSheet(f"font-weight: bold; color: {TEXT_PRIMARY};")
         summary_layout.addWidget(summary_label)
+
+        export_all_btn = QPushButton("Export All Panels (CSV)")
+        export_all_btn.clicked.connect(lambda: self._export_all_panels(result))
+        summary_layout.addWidget(export_all_btn, alignment=Qt.AlignmentFlag.AlignRight)
         summary_layout.addStretch()
         self._main_tab_widget.addTab(summary_tab, "Summary")
 
@@ -668,10 +506,11 @@ class CapillaryPanel(QWidget):
             table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             table.setSortingEnabled(True)
 
-            cols = ["SSR ID", "Dye", "Min Size", "Max Size", "Contig", "Forward Primer", "Reverse Primer"]
+            cols = ["SSR ID", "Dye", "Min Size", "Max Size", "Motif", "Contig"]
             show_chromosome = hasattr(self.state, 'get_display_name') and self.state.chrom_names
             if show_chromosome:
-                cols.insert(cols.index("Contig") + 1, "Chromosome")
+                cols.append("Chromosome")
+            cols.extend(["Forward Primer", "Reverse Primer"])
 
             table.setColumnCount(len(cols))
             table.setHorizontalHeaderLabels(cols)
@@ -686,6 +525,9 @@ class CapillaryPanel(QWidget):
                 table.setItem(i, col_idx, QTableWidgetItem(str(a["min_size"])))
                 col_idx += 1
                 table.setItem(i, col_idx, QTableWidgetItem(str(a["max_size"])))
+                col_idx += 1
+                motif = a.get("motif", "")
+                table.setItem(i, col_idx, QTableWidgetItem(motif))
                 col_idx += 1
                 contig = a.get("contig", "")
                 table.setItem(i, col_idx, QTableWidgetItem(contig))
@@ -706,11 +548,6 @@ class CapillaryPanel(QWidget):
 
             table.resizeColumnsToContents()
             panel_layout.addWidget(table)
-
-            export_btn = QPushButton(f"Export Panel {panel_idx} (CSV)")
-            export_btn.clicked.connect(lambda checked, p=panel_idx, a=assignments: self._export_panel_csv(p, a))
-            panel_layout.addWidget(export_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
             self._main_tab_widget.addTab(panel_tab, f"Panel {panel_idx}")
 
         # Chromosome View tab
@@ -734,40 +571,30 @@ class CapillaryPanel(QWidget):
         self._chromosome_view.set_data(self._all_markers, filtered_markers, self._contig_lengths)
         self._chromosome_view.set_show_filtered(self._ld_filter_cb.isChecked())
 
-    def _export_panel_csv(self, panel_idx, assignments):
-        path, _ = QFileDialog.getSaveFileName(self, f"Export Panel {panel_idx}", f"capillary_panel_{panel_idx}.csv", "CSV (*.csv)")
+    def _export_all_panels(self, result):
+        all_assignments = result.get("assignments", [])
+        if not all_assignments:
+            self._status_label.setText("No assignments to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export All Panels", "capillary_all_panels.csv", "CSV (*.csv)")
         if not path:
             return
         import pandas as pd
-        df = pd.DataFrame(assignments)
+        df = pd.DataFrame(all_assignments)
         if hasattr(self.state, 'get_display_name') and "contig" in df.columns:
             df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
+        # Reorder columns for better readability
+        col_order = ["panel", "ssr_id", "dye", "min_size", "max_size", "motif", "contig"]
+        if "Chromosome" in df.columns:
+            col_order.append("Chromosome")
+        col_order.extend(["left_primer", "right_primer"])
+        df = df[[c for c in col_order if c in df.columns]]
         df.to_csv(path, index=False)
-        self.mw.set_status(f"Panel {panel_idx} exported to {path}")
+        self.mw.set_status(f"All panels exported to {path}")
 
     def _on_assignment_error(self, msg):
         self._run_btn.setEnabled(True)
-        self._suggest_btn.setEnabled(True)
         self._status_label.setText(f"Error: {msg}")
-
-    def _export_csv(self):
-        if not self._result:
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Export Panel", "capillary_panel.csv", "CSV (*.csv)")
-        if not path:
-            return
-        import pandas as pd
-        df = pd.DataFrame(self._result["assignments"])
-        if hasattr(self.state, 'get_display_name') and "contig" in df.columns:
-            df["Chromosome"] = df["contig"].apply(lambda c: self.state.get_display_name(c))
-        df.to_csv(path, index=False)
-        self.mw.set_status(f"Panel exported to {path}")
-
-    def _export_genemapper(self):
-        self._status_label.setText("GeneMapper export not yet implemented")
-
-    def _export_genalex(self):
-        self._status_label.setText("GenAlEx export not yet implemented")
 
     def _get_pass_primers(self):
         spec = self.state.specificity_results or []
