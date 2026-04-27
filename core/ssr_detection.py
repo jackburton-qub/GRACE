@@ -1,8 +1,14 @@
 """
-SSR Detection Module — High Performance
-----------------------------------------
+SSR Detection Module — High Performance with Soft-Masking Support
+------------------------------------------------------------------
 Detects SSRs (microsatellites) in a genome dictionary:
     genome_dict = {contig_name: sequence}
+
+NEW: Respect soft-masking (lowercase = repetitive DNA)
+-------------------------------------------------------
+Set respect_soft_masking=True to only scan uppercase (non-repetitive) regions.
+This filters out centromeric satellites, transposons, and other junk DNA that
+won't make useful population genetics markers.
 
 Performance strategy
 --------------------
@@ -20,7 +26,9 @@ Performance strategy
 
 4. Early skip       — contigs shorter than k * min_rep are skipped immediately.
 
-5. Single uppercase — seq.upper() called once per contig, not per pattern.
+5. Case handling    — if respect_soft_masking=False, seq.upper() is called once
+                      per contig. If True, case is preserved and only uppercase
+                      regions are scanned.
 
 6. Chunk-based      — for very large contigs the sequence is scanned in
    scanning           overlapping chunks to keep memory pressure manageable,
@@ -92,12 +100,24 @@ def _build_canonical_table(k: int, level: int) -> dict:
 # PATTERN BUILDER
 # ---------------------------------------------------------
 
-def _build_pattern(k: int, min_rep: int) -> re.Pattern:
-    """Compile a regex that matches any k-mer repeated >= min_rep times."""
-    return re.compile(
-        rf"([ACGTN]{{{k}}})(?:\1){{{min_rep - 1},}}",
-        re.IGNORECASE,
-    )
+def _build_pattern(k: int, min_rep: int, case_sensitive: bool = False) -> re.Pattern:
+    """
+    Compile a regex that matches any k-mer repeated >= min_rep times.
+    
+    Args:
+        k: motif length
+        min_rep: minimum number of repeats
+        case_sensitive: if True, only match uppercase ACGT (for respecting soft-masking)
+    """
+    if case_sensitive:
+        # Only match uppercase ACGT (skip lowercase masked regions and N's)
+        return re.compile(rf"([ACGT]{{{k}}})(?:\1){{{min_rep - 1},}}")
+    else:
+        # Match any case (traditional behavior)
+        return re.compile(
+            rf"([ACGTN]{{{k}}})(?:\1){{{min_rep - 1},}}",
+            re.IGNORECASE,
+        )
 
 
 # ---------------------------------------------------------
@@ -116,11 +136,14 @@ def _scan_contig(args):
         contig, seq,
         motif_lengths, min_repeats,
         exclude_homopolymers, search_reverse,
-        std_level,
+        std_level, respect_soft_masking,
         patterns, canonical_tables,   # pre-built, passed in
     ) = args
 
-    seq = seq.upper()
+    # Only uppercase if not respecting soft-masking
+    if not respect_soft_masking:
+        seq = seq.upper()
+    
     n   = len(seq)
     results = []
 
@@ -161,7 +184,7 @@ def _scan_contig(args):
 
         # Reverse complement strand (optional)
         if search_reverse:
-            rc_seq = seq.translate(str.maketrans("ACGT", "TGCA"))[::-1]
+            rc_seq = seq.translate(str.maketrans("ACGTacgt", "TGCAtgca"))[::-1]
             for m in pattern.finditer(rc_seq):
                 motif_str = m.group(1).upper()
 
@@ -201,6 +224,7 @@ def find_ssrs(
     exclude_homopolymers: bool = True,
     search_reverse: bool = False,
     motif_standardisation_level: int = 4,
+    respect_soft_masking: bool = True,  # NEW PARAMETER
     progress_callback=None,
     n_workers: int = None,
     min_contig_len: int = 300,
@@ -215,6 +239,11 @@ def find_ssrs(
         exclude_homopolymers: skip single-nucleotide repeat motifs (e.g. AAAA)
         search_reverse: also scan reverse complement strand
         motif_standardisation_level: 0-4, controls canonical motif computation
+        respect_soft_masking: if True, only scan uppercase (non-repetitive) regions.
+                             Set to True when using repeat-masked genomes (*.rm.fna)
+                             to exclude satellites, transposons, and low-complexity DNA.
+                             Set to False for unmasked genomes or when you want to scan
+                             everything. DEFAULT: True (recommended for popgen markers)
         progress_callback: optional callable(done, total) for UI progress updates
         n_workers: number of worker processes (default: all available CPU cores)
         min_contig_len: skip contigs shorter than this (default 300bp).
@@ -253,7 +282,11 @@ def find_ssrs(
         return []
 
     # Pre-build patterns and canonical tables once — not once per contig
-    patterns         = {k: _build_pattern(k, min_repeats.get(k, 3)) for k in motif_lengths}
+    # Case-sensitive patterns if respecting soft-masking
+    patterns = {
+        k: _build_pattern(k, min_repeats.get(k, 3), case_sensitive=respect_soft_masking) 
+        for k in motif_lengths
+    }
     canonical_tables = {k: _build_canonical_table(k, motif_standardisation_level) for k in motif_lengths}
 
     task_args = [
@@ -261,7 +294,7 @@ def find_ssrs(
             contig, seq,
             motif_lengths, min_repeats,
             exclude_homopolymers, search_reverse,
-            motif_standardisation_level,
+            motif_standardisation_level, respect_soft_masking,
             patterns, canonical_tables,
         )
         for contig, seq in contigs
