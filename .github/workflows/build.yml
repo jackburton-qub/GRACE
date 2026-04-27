@@ -2,8 +2,10 @@ name: Build Windows, Mac, and Linux Executables
 
 on:
   push:
+    branches:
+      - primer-only-design  # Trigger on pushes to this branch
     tags:
-      - 'v*'
+      - 'v*'  # Also trigger on version tags
 
 jobs:
 
@@ -102,7 +104,7 @@ jobs:
   # Linux
   # ---------------------------------------------------------------------------
   build-linux:
-    runs-on: ubuntu-20.04  # Use older Ubuntu for better compatibility
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
