@@ -3,6 +3,8 @@ FASTA / FASTQ / GBFF Loader Module (backend-safe)
 --------------------------------------------------
 Provides clean functions for loading genome sequence files into a dictionary.
 
+UPDATED: Now preserves soft-masking (case) for repeat-masked genomes.
+
 Supported formats
 -----------------
 - FASTA  (.fa, .fasta, .fna)   — standard multi-FASTA
@@ -22,6 +24,7 @@ Performance notes
 - FASTA/FASTQ: streamed line-by-line, no full-file buffer
 - GBFF: streamed record-by-record; feature table parsed lazily
 - IUPAC filter uses str.translate() (C-level, ~10× faster than char loop)
+- Case is now preserved to respect soft-masking in repeat-masked genomes
 """
 
 import io
@@ -34,25 +37,41 @@ from typing import Optional, Tuple
 # IUPAC filter
 # ---------------------------------------------------------------------------
 
-_IUPAC = set("ACGTNRYSWKMBDHV-")
+_IUPAC = set("ACGTNRYSWKMBDHVacgtnryswkmbdhv-")  # Added lowercase
 _DELETE_TABLE = str.maketrans("", "", "".join(
     c for c in (string.ascii_letters + string.digits + string.punctuation + " ")
-    if c.upper() not in _IUPAC
+    if c not in _IUPAC and c.upper() not in _IUPAC
 ))
 
 
-def _clean(line: str) -> str:
-    return line.upper().translate(_DELETE_TABLE)
+def _clean(line: str, preserve_case: bool = True) -> str:
+    """
+    Remove non-IUPAC characters from sequence line.
+    
+    Args:
+        line: sequence line to clean
+        preserve_case: if True, keep original case (for soft-masking)
+                      if False, convert to uppercase (legacy behavior)
+    """
+    if preserve_case:
+        return line.translate(_DELETE_TABLE)
+    else:
+        return line.upper().translate(_DELETE_TABLE)
 
 
 # ---------------------------------------------------------------------------
 # FASTA loader
 # ---------------------------------------------------------------------------
 
-def load_fasta(handle) -> dict:
+def load_fasta(handle, preserve_case: bool = True) -> dict:
     """
     Load a FASTA file from a file path or file-like object.
     Returns {sequence_id: sequence}.
+    
+    Args:
+        handle: file path (str) or file-like object
+        preserve_case: if True, preserve case (for soft-masked genomes)
+                      if False, convert to uppercase
     """
     if isinstance(handle, str):
         file_obj    = open(handle, "r", encoding="utf-8", errors="replace")
@@ -79,7 +98,7 @@ def load_fasta(handle) -> dict:
                 current_id = line[1:].split()[0]
                 chunks = []
             else:
-                chunks.append(_clean(line))
+                chunks.append(_clean(line, preserve_case=preserve_case))
         if current_id is not None:
             sequences[current_id] = "".join(chunks)
     finally:
@@ -93,10 +112,15 @@ def load_fasta(handle) -> dict:
 # FASTQ loader
 # ---------------------------------------------------------------------------
 
-def load_fastq(handle) -> dict:
+def load_fastq(handle, preserve_case: bool = True) -> dict:
     """
     Load a FASTQ file from a file path or file-like object.
     Returns {sequence_id: sequence}. Quality scores are discarded.
+    
+    Args:
+        handle: file path (str) or file-like object
+        preserve_case: if True, preserve case (for soft-masked genomes)
+                      if False, convert to uppercase
     """
     if isinstance(handle, str):
         file_obj    = open(handle, "r", encoding="utf-8", errors="replace")
@@ -123,7 +147,7 @@ def load_fastq(handle) -> dict:
             next(lines, None)   # "+" separator
             next(lines, None)   # quality
             if seq_id and seq_line:
-                sequences[seq_id] = _clean(seq_line)
+                sequences[seq_id] = _clean(seq_line, preserve_case=preserve_case)
     finally:
         if close_after:
             file_obj.close()
@@ -172,6 +196,7 @@ def _parse_location(loc_str: str):
 def load_gbff(
     path: str,
     build_annotation: bool = True,
+    preserve_case: bool = True,
     progress_callback=None,
 ) -> Tuple[dict, Optional[object]]:
     """
@@ -185,6 +210,7 @@ def load_gbff(
     Args:
         path:               path to .gbff file
         build_annotation:   if True, build and return a GFFIndex
+        preserve_case:      if True, preserve case in sequences
         progress_callback:  optional callable(n_records_parsed)
 
     Returns:
@@ -248,7 +274,7 @@ def load_gbff(
         if current_id and seq_chunks:
             seq = "".join(seq_chunks)
             if seq:
-                genome[current_id] = _clean(seq)
+                genome[current_id] = _clean(seq, preserve_case=preserve_case)
 
         # Reset state
         current_id          = None
@@ -366,22 +392,26 @@ def load_gbff(
 # Auto-dispatch
 # ---------------------------------------------------------------------------
 
-def load_sequence_file(path_or_handle) -> dict:
+def load_sequence_file(path_or_handle, preserve_case: bool = True) -> dict:
     """
     Auto-detect format by file extension and dispatch to the correct loader.
     Returns {sequence_id: sequence}.
 
     For GBFF files, returns the genome dict only.
     Use load_gbff() directly if you also want the annotation index.
+    
+    Args:
+        path_or_handle: file path or file-like object
+        preserve_case: if True, preserve case for soft-masking (default: True)
     """
     if isinstance(path_or_handle, str):
         lower = path_or_handle.lower()
         if lower.endswith((".fastq", ".fq")):
-            return load_fastq(path_or_handle)
+            return load_fastq(path_or_handle, preserve_case=preserve_case)
         if lower.endswith((".gb", ".gbff", ".gbk")):
-            genome, _ = load_gbff(path_or_handle, build_annotation=False)
+            genome, _ = load_gbff(path_or_handle, build_annotation=False, preserve_case=preserve_case)
             return genome
-        return load_fasta(path_or_handle)
+        return load_fasta(path_or_handle, preserve_case=preserve_case)
 
     # File-like object — peek at first character
     content = path_or_handle.read()
@@ -390,8 +420,8 @@ def load_sequence_file(path_or_handle) -> dict:
     first = content.lstrip()[:6].upper()
     buf   = io.StringIO(content)
     if first.startswith("@"):
-        return load_fastq(buf)
+        return load_fastq(buf, preserve_case=preserve_case)
     if first.startswith("LOCUS"):
-        genome, _ = load_gbff(buf, build_annotation=False)
+        genome, _ = load_gbff(buf, build_annotation=False, preserve_case=preserve_case)
         return genome
-    return load_fasta(buf)
+    return load_fasta(buf, preserve_case=preserve_case)
