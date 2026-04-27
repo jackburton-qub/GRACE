@@ -19,6 +19,20 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts numerically instead of alphabetically."""
+    def __init__(self, text, numeric_value=None):
+        super().__init__(text)
+        self.numeric_value = numeric_value
+    
+    def __lt__(self, other):
+        """Less than comparison for sorting."""
+        if self.numeric_value is not None and isinstance(other, NumericTableWidgetItem) and other.numeric_value is not None:
+            return bool(self.numeric_value < other.numeric_value)
+        return super().__lt__(other)
+
+
 # Cap table rows to prevent main-thread freeze on large datasets.
 TABLE_DISPLAY_LIMIT = 10_000
 RAW_TABLE_LIMIT     = 5_000   # raw BLAST hits can be enormous — cap lower
@@ -254,12 +268,23 @@ class ResultsPanel(QWidget):
         for row_idx in range(len(display_df)):
             for col_idx, col in enumerate(display_cols):
                 val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
-                text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
-                item = QTableWidgetItem(text)
+                
+                # Use NumericTableWidgetItem for numeric columns
+                if isinstance(val, float):
+                    text = f"{val:.2f}"
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif isinstance(val, int):
+                    text = str(val)
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif val is None:
+                    item = QTableWidgetItem("")
+                else:
+                    item = QTableWidgetItem(str(val))
+                
                 if col == "specificity_status":
-                    if text == "PASS":
+                    if str(val) == "PASS":
                         item.setForeground(QColor(SUCCESS))
-                    elif text == "FAIL":
+                    elif str(val) == "FAIL":
                         item.setForeground(QColor(ERROR))
                 self.table.setItem(row_idx, col_idx, item)
 
@@ -306,8 +331,20 @@ class ResultsPanel(QWidget):
         for row_idx in range(len(display_raw)):
             for col_idx, col in enumerate(display_cols):
                 val = display_raw.iat[row_idx, display_raw.columns.get_loc(col)]
-                text = f"{val:.4f}" if isinstance(val, float) else ("" if val is None else str(val))
-                self.raw_table.setItem(row_idx, col_idx, QTableWidgetItem(text))
+                
+                # Use NumericTableWidgetItem for numeric columns
+                if isinstance(val, float):
+                    text = f"{val:.4f}"
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif isinstance(val, int):
+                    text = str(val)
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif val is None:
+                    item = QTableWidgetItem("")
+                else:
+                    item = QTableWidgetItem(str(val))
+                
+                self.raw_table.setItem(row_idx, col_idx, item)
 
         self.raw_table.resizeColumnsToContents()
         self.raw_table.setSortingEnabled(True)

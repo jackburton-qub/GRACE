@@ -73,9 +73,9 @@ def get_blast_bin_dir() -> str:
 class BlastParams:
     task: str = "blastn-short"
     word_size: int = 7
-    evalue: float = 0.001
+    evalue: float = 0.01
     reward: int = 1
-    penalty: int = -3
+    penalty: int = -2
     gapopen: int = 5
     gapextend: int = 2
     dust: str = "no"
@@ -87,8 +87,8 @@ class SpecificityParams:
     min_product: int = 100
     max_product: int = 300
     max_mismatches: int = 3
-    min_align_len: int = 15
-    min_identity: float = 80.0
+    min_align_len: int = 16
+    min_identity: float = 85.0
     allow_offtarget_amplicons: bool = False
     max_offtarget_amplicon_size: int = 1000
     pass_mode: str = "amplicons"
@@ -105,90 +105,52 @@ class SpecificityParams:
 # ---------------------------------------------------------------------------
 
 PRESET_SPECIFICITY = {
-    "Single-locus": SpecificityParams(
+    "Amplicons": SpecificityParams(
         min_product=100,
         max_product=300,
-        max_mismatches=0,
-        min_align_len=18,
-        min_identity=100.0,
-        allow_offtarget_amplicons=False,
-        max_offtarget_amplicon_size=800,
-        pass_mode="hits",
-        max_total_hits=1,
-    ),
-    "Strict": SpecificityParams(
-        min_product=100,
-        max_product=300,
-        max_mismatches=2,
-        min_align_len=18,
-        min_identity=90.0,
-        allow_offtarget_amplicons=False,
-        max_offtarget_amplicon_size=800,
-    ),
-    "Balanced": SpecificityParams(
-        min_product=100,
-        max_product=300,
-        max_mismatches=3,
-        min_align_len=16,
-        min_identity=85.0,
+        max_mismatches=2,              # Stricter: allow fewer mismatches (was 3)
+        min_align_len=17,              # Stricter: longer minimum alignment (was 16)
+        min_identity=90.0,             # Stricter: higher identity required (was 85.0)
         allow_offtarget_amplicons=False,
         max_offtarget_amplicon_size=1000,
+        pass_mode="amplicons",         # Product-based validation
+        max_total_hits=1,              # Not used in amplicons mode
     ),
-    "Lenient": SpecificityParams(
-        min_product=80,
-        max_product=400,
-        max_mismatches=4,
-        min_align_len=14,
-        min_identity=80.0,
-        allow_offtarget_amplicons=True,
-        max_offtarget_amplicon_size=1500,
+    "Hits": SpecificityParams(
+        min_product=100,
+        max_product=300,
+        max_mismatches=0,              # Perfect match only
+        min_align_len=18,              # Longer minimum alignment
+        min_identity=100.0,            # 100% identity required
+        allow_offtarget_amplicons=False,
+        max_offtarget_amplicon_size=800,
+        pass_mode="hits",              # Location-based validation
+        max_total_hits=1,              # Each primer maps exactly once
     ),
 }
 
 PRESET_BLAST = {
-    "Single-locus": BlastParams(
+    "Amplicons": BlastParams(
         task="blastn-short",
         word_size=7,
-        evalue=0.001,
+        evalue=0.001,                  # Stricter: lower e-value (was 0.01)
         reward=1,
-        penalty=-3,
+        penalty=-3,                    # Stricter: harsher penalty (was -2)
+        gapopen=5,
+        gapextend=2,
+        dust="no",                     # Keep off for SSR primers
+        soft_masking="false",
+    ),
+    "Hits": BlastParams(
+        task="blastn-short",
+        word_size=7,
+        evalue=0.001,                  # Stricter e-value
+        reward=1,
+        penalty=-3,                    # Harsher penalty for mismatches
         gapopen=5,
         gapextend=2,
         dust="no",
         soft_masking="false",
-    ),
-    "Strict": BlastParams(
-        task="blastn-short",
-        word_size=7,
-        evalue=0.01,
-        reward=1,
-        penalty=-3,
-        gapopen=5,
-        gapextend=2,
-        dust="no",
-        soft_masking="false",
-    ),
-    "Balanced": BlastParams(
-        task="blastn-short",
-        word_size=9,
-        evalue=0.1,
-        reward=1,
-        penalty=-2,
-        gapopen=5,
-        gapextend=2,
-        dust="yes",
-        soft_masking="true",
-    ),
-    "Lenient": BlastParams(
-        task="blastn",
-        word_size=11,
-        evalue=1.0,
-        reward=1,
-        penalty=-2,
-        gapopen=5,
-        gapextend=2,
-        dust="yes",
-        soft_masking="true",
     ),
 }
 
@@ -237,7 +199,6 @@ def _parse_blast_tab(path: str) -> List[Dict[str, Any]]:
     hits = []
     if not os.path.exists(path):
         return hits
-
     with open(path) as fh:
         for line in fh:
             line = line.strip()

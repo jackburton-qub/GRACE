@@ -152,7 +152,7 @@ def _scan_contig(args):
 
             results.append({
                 "contig":          contig,
-                "start":           m.start() + 1,  # 1-based, matches Krait2 convention
+                "start":           m.start() + 1,  # 1-based,
                 "end":             m.end(),         # 1-based inclusive
                 "motif":           motif_str,
                 "canonical_motif": canon,

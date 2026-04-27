@@ -1,4 +1,4 @@
-name: Build Windows and Mac Executables
+name: Build Windows, Mac, and Linux Executables
 
 on:
   push:
@@ -76,14 +76,14 @@ jobs:
         run: |
           curl -o blast.tar.gz "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0%2B-universal-macosx.tar.gz"
           tar -xzf blast.tar.gz
-          mkdir -p blast/mac
-          cp ncbi-blast-2.17.0+/bin/blastn      blast/mac/
-          cp ncbi-blast-2.17.0+/bin/makeblastdb blast/mac/
-          chmod +x blast/mac/blastn
-          chmod +x blast/mac/makeblastdb
+          mkdir -p blast/macos
+          cp ncbi-blast-2.17.0+/bin/blastn      blast/macos/
+          cp ncbi-blast-2.17.0+/bin/makeblastdb blast/macos/
+          chmod +x blast/macos/blastn
+          chmod +x blast/macos/makeblastdb
 
       - name: Build executable
-        run: pyinstaller GRACE_mac.spec
+        run: pyinstaller GRACE.spec
 
       - name: Zip app bundle
         run: |
@@ -97,3 +97,61 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/GRACE-macOS.zip
+
+  # ---------------------------------------------------------------------------
+  # Linux
+  # ---------------------------------------------------------------------------
+  build-linux:
+    runs-on: ubuntu-20.04  # Use older Ubuntu for better compatibility
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-xinerama0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxkbcommon-x11-0 \
+            libdbus-1-3 \
+            libegl1 \
+            libfontconfig1 \
+            libgl1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download BLAST+ binaries (Linux)
+        run: |
+          curl -o blast.tar.gz "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-x64-linux.tar.gz"
+          tar -xzf blast.tar.gz
+          mkdir -p blast/linux
+          cp ncbi-blast-2.17.0+/bin/blastn      blast/linux/
+          cp ncbi-blast-2.17.0+/bin/makeblastdb blast/linux/
+          chmod +x blast/linux/blastn
+          chmod +x blast/linux/makeblastdb
+
+      - name: Build executable
+        run: pyinstaller GRACE.spec
+
+      - name: Create tarball
+        run: |
+          cd dist
+          tar -czf GRACE-Linux-x64.tar.gz GRACE/
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GRACE-Linux-x64.tar.gz

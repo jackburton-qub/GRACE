@@ -31,69 +31,43 @@ import re
 # Presets
 # ---------------------------------------------------------------------------
 
-STRICT_PRESET = {
-    "PRIMER_MIN_SIZE": 20,
-    "PRIMER_OPT_SIZE": 22,
-    "PRIMER_MAX_SIZE": 24,
-    "PRIMER_MIN_TM": 59.0,
-    "PRIMER_OPT_TM": 60.0,
-    "PRIMER_MAX_TM": 61.0,
-    "PRIMER_MIN_GC": 45.0,
-    "PRIMER_MAX_GC": 55.0,
-    "PRIMER_MAX_POLY_X": 3,
-    "PRIMER_MAX_SELF_ANY": 4.0,
-    "PRIMER_MAX_SELF_END": 1.0,
-    "PRIMER_PAIR_MAX_COMPL_ANY": 4.0,
-    "PRIMER_PAIR_MAX_COMPL_END": 1.0,
-    "PRIMER_MAX_HAIRPIN_TH": 12.0,
-    "PRIMER_PAIR_MAX_DIFF_TM": 1.0,
-    "PRIMER_SALT_MONOVALENT": 50.0,
-    "PRIMER_DNA_CONC": 50.0,
-}
-
+# RECOMMENDED_PRESET - Used for Capillary Electrophoresis mode (default)
+# Standard parameters for SSR genotyping with fragment analysis
 RECOMMENDED_PRESET = {
+    # Core primer constraints
     "PRIMER_MIN_SIZE": 18,
     "PRIMER_OPT_SIZE": 20,
-    "PRIMER_MAX_SIZE": 27,
-    "PRIMER_MIN_TM": 57.0,
-    "PRIMER_OPT_TM": 60.0,
-    "PRIMER_MAX_TM": 63.0,
+    "PRIMER_MAX_SIZE": 25,
+    "PRIMER_MIN_TM": 52.0,
+    "PRIMER_OPT_TM": 58.0,
+    "PRIMER_MAX_TM": 60.0,
     "PRIMER_MIN_GC": 30.0,
-    "PRIMER_MAX_GC": 70.0,
-    "PRIMER_MAX_POLY_X": 4,
+    "PRIMER_MAX_GC": 60.0,
+    
+    # Secondary structure
+    "PRIMER_MAX_POLY_X": 5,
+    "PRIMER_GC_CLAMP": 2,
     "PRIMER_MAX_SELF_ANY": 8.0,
     "PRIMER_MAX_SELF_END": 3.0,
     "PRIMER_PAIR_MAX_COMPL_ANY": 8.0,
     "PRIMER_PAIR_MAX_COMPL_END": 3.0,
     "PRIMER_MAX_HAIRPIN_TH": 24.0,
-    "PRIMER_PAIR_MAX_DIFF_TM": 2.0,
+    
+    # Pair constraints
+    "PRIMER_PAIR_MAX_DIFF_TM": 5.0,
+    
+    # Thermodynamic parameters
     "PRIMER_SALT_MONOVALENT": 50.0,
+    "PRIMER_SALT_DIVALENT": 0.0,
+    "PRIMER_DNTP_CONC": 0.0,
     "PRIMER_DNA_CONC": 50.0,
+    "PRIMER_SALT_CORRECTIONS": 0,
+    "PRIMER_TM_FORMULA": 0,
 }
 
-RELAXED_PRESET = {
-    "PRIMER_MIN_SIZE": 16,
-    "PRIMER_OPT_SIZE": 20,
-    "PRIMER_MAX_SIZE": 30,
-    "PRIMER_MIN_TM": 50.0,
-    "PRIMER_OPT_TM": 58.0,
-    "PRIMER_MAX_TM": 65.0,
-    "PRIMER_MIN_GC": 20.0,
-    "PRIMER_MAX_GC": 80.0,
-    "PRIMER_MAX_POLY_X": 6,
-    "PRIMER_MAX_SELF_ANY": 12.0,
-    "PRIMER_MAX_SELF_END": 6.0,
-    "PRIMER_PAIR_MAX_COMPL_ANY": 12.0,
-    "PRIMER_PAIR_MAX_COMPL_END": 6.0,
-    "PRIMER_MAX_HAIRPIN_TH": 40.0,
-    "PRIMER_PAIR_MAX_DIFF_TM": 4.0,
-    "PRIMER_SALT_MONOVALENT": 50.0,
-    "PRIMER_DNA_CONC": 50.0,
-}
-
-# amplicon preset — optimised for Illumina amplicon sequencing
-# Short flanks + small products ensure amplicons fit within 300bp paired-end reads.
-# Slightly stricter Tm range for consistent multiplexed PCR.
+# amplicon_PRESET - Used for Amplicon Sequencing mode
+# Optimized for Illumina amplicon sequencing
+# Stricter Tm range and shorter products to fit 300bp paired-end reads
 amplicon_PRESET = {
     "PRIMER_MIN_SIZE": 18,
     "PRIMER_OPT_SIZE": 20,
@@ -104,41 +78,30 @@ amplicon_PRESET = {
     "PRIMER_MIN_GC": 35.0,
     "PRIMER_MAX_GC": 65.0,
     "PRIMER_MAX_POLY_X": 3,
+    "PRIMER_GC_CLAMP": 2,
     "PRIMER_MAX_SELF_ANY": 6.0,
     "PRIMER_MAX_SELF_END": 2.0,
     "PRIMER_PAIR_MAX_COMPL_ANY": 6.0,
     "PRIMER_PAIR_MAX_COMPL_END": 2.0,
     "PRIMER_MAX_HAIRPIN_TH": 16.0,
     "PRIMER_PAIR_MAX_DIFF_TM": 1.0,
+    # Thermodynamic parameters
     "PRIMER_SALT_MONOVALENT": 50.0,
+    "PRIMER_SALT_DIVALENT": 0.0,
+    "PRIMER_DNTP_CONC": 0.0,
     "PRIMER_DNA_CONC": 50.0,
+    "PRIMER_SALT_CORRECTIONS": 0,
+    "PRIMER_TM_FORMULA": 0,
 }
 
 PRESETS = {
-    "strict":      STRICT_PRESET,
     "recommended": RECOMMENDED_PRESET,
-    "relaxed":     RELAXED_PRESET,
-    "amplicon":         amplicon_PRESET,
-}
-
-# Default parameters for amplicon mode
-amplicon_DEFAULTS = {
-    "flank":            50,     # short flanks to keep product small
-    "product_min":      80,
-    "product_max":      200,    # must fit in Illumina 300bp paired-end
-    "num_pairs":        2,
-}
-
-# Standard Illumina adapter tails for M13-tailed primer approach
-# Forward primer gets M13F tail, reverse gets M13R tail
-# These are added to the 5' end of each primer for adapter ligation
-ILLUMINA_TAILS = {
-    "forward": "TGTAAAACGACGGCCAGT",   # M13F (-21) universal tail
-    "reverse": "CAGGAAACAGCTATGAC",    # M13R universal tail
+    "amplicon":    amplicon_PRESET,
 }
 
 INT_KEYS = {
     "PRIMER_MIN_SIZE", "PRIMER_OPT_SIZE", "PRIMER_MAX_SIZE", "PRIMER_MAX_POLY_X",
+    "PRIMER_GC_CLAMP", "PRIMER_SALT_CORRECTIONS", "PRIMER_TM_FORMULA",
 }
 FLOAT_KEYS = {
     "PRIMER_MIN_TM", "PRIMER_OPT_TM", "PRIMER_MAX_TM",
@@ -146,8 +109,10 @@ FLOAT_KEYS = {
     "PRIMER_MAX_SELF_ANY", "PRIMER_MAX_SELF_END",
     "PRIMER_PAIR_MAX_COMPL_ANY", "PRIMER_PAIR_MAX_COMPL_END",
     "PRIMER_MAX_HAIRPIN_TH", "PRIMER_PAIR_MAX_DIFF_TM",
-    "PRIMER_SALT_MONOVALENT", "PRIMER_DNA_CONC",
+    "PRIMER_SALT_MONOVALENT", "PRIMER_SALT_DIVALENT", "PRIMER_DNTP_CONC",
+    "PRIMER_DNA_CONC",
 }
+
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +150,15 @@ _NN_DG = {
 
 
 def calc_3prime_dg(seq):
+    """
+    Calculate 3' end stability using simplified nearest-neighbor thermodynamics.
+    
+    Sums the absolute ΔG values for the last 3 dinucleotides (4 bases) of the primer.
+    Lower values = less stable 3' end, higher values = more stable 3' end.
+    
+    This custom calculation gives more reasonable values (typically 3-6 kcal/mol)
+    compared to Primer3's PRIMER_END_STABILITY which uses a different scale.
+    """
     tetramer = seq[-4:].upper()
     total    = sum(abs(_NN_DG.get(tetramer[i:i+2], -1.0)) for i in range(3))
     return round(total, 2)
@@ -253,8 +227,8 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
         "SEQUENCE_TEMPLATE":         template,
         "SEQUENCE_TARGET":           [target_start, target_len],
         "PRIMER_PRODUCT_SIZE_RANGE": [list(product_size_range)],
-        # Exclude the SSR itself from primer binding — prevents primers
-        # landing within the repeat, which causes the low-complexity problem
+        # Keep stricter masking: exclude the SSR itself from primer binding
+        # This prevents primers landing within the repeat 
         "SEQUENCE_EXCLUDED_REGION":  [[target_start, target_len]],
     }
 
@@ -291,8 +265,8 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
             "product_size":    result[f"PRIMER_PAIR_{rank}_PRODUCT_SIZE"],
             "left_gc":         calc_gc(left_seq),
             "right_gc":        calc_gc(right_seq),
-            "left_tm":         calc_tm(left_seq),
-            "right_tm":        calc_tm(right_seq),
+            "left_tm":         round(result[f"PRIMER_LEFT_{rank}_TM"], 2),
+            "right_tm":        round(result[f"PRIMER_RIGHT_{rank}_TM"], 2),
             "left_3end_dg":    calc_3prime_dg(left_seq),
             "right_3end_dg":   calc_3prime_dg(right_seq),
             "amplicon_mode":        amplicon_mode,
@@ -320,7 +294,7 @@ def design_primers_for_all_ssrs(
     genome,
     ssr_list,
     flank=100,
-    product_size_range=(100, 300),
+    product_size_range=(100, 350),
     preset="recommended",
     primer_opts=None,
     num_pairs=1,

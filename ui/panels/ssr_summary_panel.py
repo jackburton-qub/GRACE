@@ -149,31 +149,29 @@ class SSRSummaryPanel(QWidget):
         title.setStyleSheet(f"color: {ACCENT};")
         L.addWidget(title)
 
-        self._tab_widget = QTabWidget()
-        L.addWidget(self._tab_widget)
-
-        # Statistics Tab
-        stats_tab = QWidget()
-        self._build_stats_tab(stats_tab)
-        self._tab_widget.addTab(stats_tab, "Statistics")
-
-        # Genomic Distribution Tab
-        dist_tab = QWidget()
-        self._build_distribution_tab(dist_tab)
-        self._tab_widget.addTab(dist_tab, "Genomic Distribution")
-
-    def _build_stats_tab(self, tab):
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(16)
-
         # Overview cards
         self._overview_grid = QGridLayout()
-        layout.addLayout(self._overview_grid)
+        L.addLayout(self._overview_grid)
+
+        # Warning banner for fragmented genomes
+        self._warning_banner = QLabel(
+            "Genome is fragmented. Showing contigs in arbitrary order. "
+            "Load a GFF with chromosome annotations for proper grouping."
+        )
+        self._warning_banner.setStyleSheet(f"background: {WARNING}22; color: {WARNING}; padding: 8px; border-radius: 4px;")
+        self._warning_banner.setWordWrap(True)
+        self._warning_banner.setVisible(False)
+        L.addWidget(self._warning_banner)
+
+        # Chromosome/Contig distribution histogram
+        L.addWidget(QLabel("SSR Count by Chromosome / Contig (Top 15)"))
+        self._chrom_bar = VerticalBarChart()
+        L.addWidget(self._chrom_bar)
 
         # SSR Count by Sequence (vertical bars)
-        layout.addWidget(QLabel("SSR Count by Sequence — Top 15 of total sequences"))
+        L.addWidget(QLabel("SSR Count by Sequence — Top 15 of total sequences"))
         self._contig_bar = VerticalBarChart()
-        layout.addWidget(self._contig_bar)
+        L.addWidget(self._contig_bar)
 
         # Pie charts row (side‑by‑side)
         pie_row = QHBoxLayout()
@@ -195,39 +193,15 @@ class SSRSummaryPanel(QWidget):
         feature_layout.addWidget(self._feature_pie)
         pie_row.addWidget(feature_widget)
 
-        layout.addLayout(pie_row)
+        L.addLayout(pie_row)
 
         # Store reference to feature widget to hide/show later
         self._feature_widget = feature_widget
 
         # Top motifs vertical bar chart
-        layout.addWidget(QLabel("Top 15 Canonical Motifs"))
+        L.addWidget(QLabel("Top 15 Canonical Motifs"))
         self._top_motifs_bar = VerticalBarChart()
-        layout.addWidget(self._top_motifs_bar)
-
-    def _build_distribution_tab(self, tab):
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(16)
-
-        self._warning_banner = QLabel(
-            "Genome is fragmented. Showing contigs in arbitrary order. "
-            "Load a GFF with chromosome annotations for proper grouping."
-        )
-        self._warning_banner.setStyleSheet(f"background: {WARNING}22; color: {WARNING}; padding: 8px; border-radius: 4px;")
-        self._warning_banner.setWordWrap(True)
-        self._warning_banner.setVisible(False)
-        layout.addWidget(self._warning_banner)
-
-        layout.addWidget(QLabel("SSR Count by Chromosome / Contig (Top 15)"))
-        self._chrom_bar = VerticalBarChart()
-        layout.addWidget(self._chrom_bar)
-
-        layout.addWidget(QLabel("All Chromosomes / Contigs"))
-        self._dist_table = QTableWidget()
-        self._dist_table.setAlternatingRowColors(True)
-        self._dist_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._dist_table.setSortingEnabled(True)
-        layout.addWidget(self._dist_table)
+        L.addWidget(self._top_motifs_bar)
 
     def _refresh(self):
         if not self.state.has_ssrs:
@@ -331,7 +305,7 @@ class SSRSummaryPanel(QWidget):
         top_motifs = motif_counts.most_common(15)
         self._top_motifs_bar.set_data(top_motifs)
 
-        # Genomic Distribution Tab
+        # Chromosome/Contig distribution histogram
         counts = {}
         for ssr in ssrs:
             display = ssr.get("chrom_name", ssr.get("contig", "?"))
@@ -343,15 +317,6 @@ class SSRSummaryPanel(QWidget):
 
         top_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:15]
         self._chrom_bar.set_data(top_items)
-
-        all_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        self._dist_table.setRowCount(len(all_items))
-        self._dist_table.setColumnCount(2)
-        self._dist_table.setHorizontalHeaderLabels(["Chromosome / Contig", "SSR Count"])
-        for i, (name, cnt) in enumerate(all_items):
-            self._dist_table.setItem(i, 0, QTableWidgetItem(str(name)))
-            self._dist_table.setItem(i, 1, QTableWidgetItem(str(cnt)))
-        self._dist_table.resizeColumnsToContents()
 
     def on_show(self):
         self._refresh()

@@ -1,8 +1,11 @@
 # GRACE.spec
 # ----------
-# PyInstaller build spec for GRACE (PyQt6 version) — Windows build.
+# PyInstaller build spec for GRACE (PyQt6 version) — Multi-platform build.
 #
-# Produces a single folder in dist/GRACE/ containing GRACE.exe
+# Produces platform-specific builds:
+#   Windows: dist/GRACE/ folder with GRACE.exe
+#   macOS:   dist/GRACE.app bundle
+#   Linux:   dist/GRACE/ folder with GRACE executable
 #
 # Build with:
 #   python build.py
@@ -10,17 +13,22 @@
 # Or directly:
 #   pyinstaller GRACE.spec
 #
-# Before building, ensure BLAST+ binaries are in blast/windows/:
-#   blast/windows/blastn.exe
-#   blast/windows/blastn.exe.manifest
-#   blast/windows/makeblastdb.exe
-#   blast/windows/makeblastdb.exe.manifest
-#   blast/windows/ncbi-vdb-md.dll
-#   blast/windows/nghttp2.dll
+# Before building, ensure BLAST+ binaries are in the correct platform directory:
+#   Windows: blast/windows/blastn.exe, makeblastdb.exe, etc.
+#   macOS:   blast/macos/blastn, makeblastdb, etc.
+#   Linux:   blast/linux/blastn, makeblastdb, etc.
 
 import sys
 import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
+
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+
+IS_WINDOWS = sys.platform.startswith("win")
+IS_MAC     = sys.platform == "darwin"
+IS_LINUX   = sys.platform.startswith("linux")
 
 # ---------------------------------------------------------------------------
 # Collect packages PyInstaller cannot fully analyse automatically
@@ -34,8 +42,19 @@ pandas_hiddenimports = collect_submodules("pandas")
 numpy_hiddenimports  = collect_submodules("numpy")
 
 # ---------------------------------------------------------------------------
-# Application source files
+# Application source files (platform-specific BLAST binaries)
 # ---------------------------------------------------------------------------
+
+# Determine which BLAST directory to include
+if IS_WINDOWS:
+    blast_dir = ("blast/windows", "blast/windows")
+elif IS_MAC:
+    blast_dir = ("blast/macos", "blast/macos")
+elif IS_LINUX:
+    blast_dir = ("blast/linux", "blast/linux")
+else:
+    blast_dir = None
+    print(f"WARNING: Unknown platform {sys.platform}, BLAST binaries will not be included!")
 
 app_datas = [
     ("main.py",          "."),
@@ -43,8 +62,11 @@ app_datas = [
     ("ui",               "ui"),
     ("core",             "core"),
     ("assets",           "assets"),
-    ("blast/windows",    "blast/windows"),
 ]
+
+# Add BLAST binaries if platform was detected
+if blast_dir:
+    app_datas.append(blast_dir)
 
 # ---------------------------------------------------------------------------
 # Hidden imports
@@ -65,7 +87,6 @@ all_hidden = (
         "multiprocessing.popen_fork",
         "multiprocessing.popen_forkserver",
         "multiprocessing.popen_spawn_posix",
-        "multiprocessing.popen_spawn_win32",
         "subprocess",
         "tempfile",
         "socket",
@@ -91,6 +112,10 @@ all_hidden = (
     ]
 )
 
+# Add Windows-specific imports only on Windows
+if IS_WINDOWS:
+    all_hidden.append("multiprocessing.popen_spawn_win32")
+
 # ---------------------------------------------------------------------------
 # Combined datas and binaries
 # ---------------------------------------------------------------------------
@@ -107,6 +132,19 @@ all_binaries = (
     + primer3_binaries
     + reportlab_binaries
 )
+
+# ---------------------------------------------------------------------------
+# Platform-specific icon
+# ---------------------------------------------------------------------------
+
+if IS_WINDOWS:
+    icon_path = "assets/icon.ico" if os.path.exists("assets/icon.ico") else None
+elif IS_MAC:
+    icon_path = "assets/icon.icns" if os.path.exists("assets/icon.icns") else None
+elif IS_LINUX:
+    icon_path = "assets/icon.png" if os.path.exists("assets/icon.png") else None
+else:
+    icon_path = None
 
 # ---------------------------------------------------------------------------
 # ANALYSIS
@@ -153,7 +191,7 @@ exe = EXE(
     upx=False,
     console=False,
     windowed=True,
-    icon=None,
+    icon=icon_path,
 )
 
 coll = COLLECT(
@@ -167,14 +205,16 @@ coll = COLLECT(
     name="GRACE",
 )
 
-app = BUNDLE(
-    coll,
-    name="GRACE.app",
-    icon=None,
-    bundle_identifier="com.grace.app",
-    info_plist={
-        "NSPrincipalClass":           "NSApplication",
-        "NSHighResolutionCapable":    True,
-        "CFBundleShortVersionString": "1.0.0",
-    },
-)
+# macOS app bundle (only built on macOS)
+if IS_MAC:
+    app = BUNDLE(
+        coll,
+        name="GRACE.app",
+        icon=icon_path,
+        bundle_identifier="com.grace.app",
+        info_plist={
+            "NSPrincipalClass":           "NSApplication",
+            "NSHighResolutionCapable":    True,
+            "CFBundleShortVersionString": "1.0.0",
+        },
+    )

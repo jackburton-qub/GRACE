@@ -20,6 +20,20 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING,
 )
 
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts numerically instead of alphabetically."""
+    def __init__(self, text, numeric_value=None):
+        super().__init__(text)
+        self.numeric_value = numeric_value
+    
+    def __lt__(self, other):
+        """Less than comparison for sorting."""
+        if self.numeric_value is not None and isinstance(other, NumericTableWidgetItem) and other.numeric_value is not None:
+            return bool(self.numeric_value < other.numeric_value)
+        return super().__lt__(other)
+
+
 TABLE_DISPLAY_LIMIT = 10_000
 
 
@@ -529,7 +543,14 @@ class SSRPanel(QWidget):
                     val = self.state.get_display_name(contig)
                 else:
                     val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
-                item = QTableWidgetItem(str(val))
+                
+                # Use NumericTableWidgetItem for numeric columns
+                if isinstance(val, (int, float)):
+                    text = str(val)
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                else:
+                    item = QTableWidgetItem(str(val))
+                
                 if col_idx == 0:
                     item.setData(
                         Qt.ItemDataRole.UserRole,

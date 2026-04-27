@@ -21,6 +21,20 @@ from ui.style import (
     FONT_SIZE_SMALL, PANEL_PADDING, BG_MID, BG_LIGHT, BORDER,
 )
 
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts numerically instead of alphabetically."""
+    def __init__(self, text, numeric_value=None):
+        super().__init__(text)
+        self.numeric_value = numeric_value
+    
+    def __lt__(self, other):
+        """Less than comparison for sorting."""
+        if self.numeric_value is not None and isinstance(other, NumericTableWidgetItem) and other.numeric_value is not None:
+            return bool(self.numeric_value < other.numeric_value)
+        return super().__lt__(other)
+
+
 TABLE_DISPLAY_LIMIT          = 10_000
 PRIMER_DESIGN_WARN_THRESHOLD = 50_000
 
@@ -82,23 +96,31 @@ class PrimerPanel(QWidget):
             self._amplicon_mode = False
             self.state.workflow_mode = "capillary"
             self._mode_desc.setText(
-                "Fragment analysis · M13 tails · Dye multiplexing\n"
+                "Fragment analysis · Dye multiplexing\n"
                 "Product sizes 100–350bp · Flank 100bp"
             )
             self.flank.setValue(100)
             self.product_min.setValue(100)
-            self.product_max.setValue(250)
+            self.product_max.setValue(350)
             self.tm_min.setValue(52.0)
             self.tm_opt.setValue(58.0)
             self.tm_max.setValue(60.0)
-            self.max_tm_diff.setValue(2.0)
-            self.max_poly_x.setValue(4)
+            self.max_tm_diff.setValue(5.0)
+            self.max_poly_x.setValue(5)
+            self.gc_clamp.setValue(2)
+            # Thermodynamic params
+            self.salt_monovalent.setValue(50.0)
+            self.salt_divalent.setValue(0.0)
+            self.dntp_conc.setValue(0.0)
+            self.dna_conc.setValue(50.0)
+            self.tm_formula.setValue(0)
+            self.salt_corrections.setValue(0)
         else:  # amplicon
             self._btn_capillary.setChecked(False)
             self._amplicon_mode = True
             self.state.workflow_mode = "amplicon"
             self._mode_desc.setText(
-                "Illumina amplicon sequencing · P5/P7 tails\n"
+                "Illumina amplicon sequencing\n"
                 "Product sizes 80–200bp · Flank 50bp · Tighter Tm range"
             )
             self.flank.setValue(50)
@@ -109,6 +131,14 @@ class PrimerPanel(QWidget):
             self.tm_max.setValue(62.0)
             self.max_tm_diff.setValue(1.0)
             self.max_poly_x.setValue(3)
+            self.gc_clamp.setValue(2)
+            # Thermodynamic params
+            self.salt_monovalent.setValue(50.0)
+            self.salt_divalent.setValue(0.0)
+            self.dntp_conc.setValue(0.0)
+            self.dna_conc.setValue(50.0)
+            self.tm_formula.setValue(0)
+            self.salt_corrections.setValue(0)
         QApplication.processEvents()
 
     def _build_ui(self):
@@ -194,104 +224,182 @@ class PrimerPanel(QWidget):
         # Settings tabs
         tabs = QTabWidget()
 
-        basic = QWidget()
-        bg = QGridLayout(basic)
-        bg.setSpacing(10); bg.setContentsMargins(12, 12, 12, 12)
+        # Basic settings tab
+        basic_tab = QWidget()
+        basic_layout = QVBoxLayout(basic_tab)
+        basic_layout.setContentsMargins(12, 12, 12, 12)
 
-        bg.addWidget(_lbl("Min product size (bp)"), 0, 0)
-        self.product_min = QSpinBox(); self.product_min.setRange(50, 1000); self.product_min.setValue(100)
-        bg.addWidget(self.product_min, 0, 1)
-        bg.addWidget(_lbl("Max product size (bp)"), 0, 2)
-        self.product_max = QSpinBox(); self.product_max.setRange(50, 2000); self.product_max.setValue(250)
-        bg.addWidget(self.product_max, 0, 3)
-
-        bg.addWidget(_lbl("Flank size (bp)"), 1, 0)
-        self.flank = QSpinBox(); self.flank.setRange(20, 1000); self.flank.setValue(100)
-        bg.addWidget(self.flank, 1, 1)
-        bg.addWidget(_lbl("Pairs per SSR"), 1, 2)
-        self.num_pairs = QSpinBox(); self.num_pairs.setRange(1, 5); self.num_pairs.setValue(2)
+        basic_group = QGroupBox("PCR Parameters")
+        bg = QGridLayout(basic_group); bg.setSpacing(10); bg.setContentsMargins(12, 12, 12, 12)
+        bg.addWidget(_lbl("Flanking region (bp)", "Bases upstream/downstream of SSR"), 0, 0)
+        self.flank = QSpinBox(); self.flank.setRange(50, 1000); self.flank.setValue(100); self.flank.setSingleStep(50)
+        bg.addWidget(self.flank, 0, 1)
+        bg.addWidget(_lbl("Min product size (bp)"), 0, 2)
+        self.product_min = QSpinBox(); self.product_min.setRange(50, 1000); self.product_min.setValue(100); self.product_min.setSingleStep(10)
+        bg.addWidget(self.product_min, 0, 3)
+        bg.addWidget(_lbl("Max product size (bp)"), 1, 0)
+        self.product_max = QSpinBox(); self.product_max.setRange(50, 1000); self.product_max.setValue(250); self.product_max.setSingleStep(10)
+        bg.addWidget(self.product_max, 1, 1)
+        bg.addWidget(_lbl("Primer pairs per SSR"), 1, 2)
+        self.num_pairs = QSpinBox(); self.num_pairs.setRange(1, 10); self.num_pairs.setValue(3)
         bg.addWidget(self.num_pairs, 1, 3)
-
-        bg.addWidget(_lbl("Min primer size (bp)"), 2, 0)
-        self.primer_min_size = QSpinBox(); self.primer_min_size.setRange(10, 30); self.primer_min_size.setValue(18)
-        bg.addWidget(self.primer_min_size, 2, 1)
-        bg.addWidget(_lbl("Optimal primer size (bp)"), 2, 2)
-        self.primer_opt_size = QSpinBox(); self.primer_opt_size.setRange(10, 35); self.primer_opt_size.setValue(22)
-        bg.addWidget(self.primer_opt_size, 2, 3)
-        bg.addWidget(_lbl("Max primer size (bp)"), 3, 0)
-        self.primer_max_size = QSpinBox(); self.primer_max_size.setRange(15, 40); self.primer_max_size.setValue(25)
-        bg.addWidget(self.primer_max_size, 3, 1)
-
-        bg.addWidget(_lbl("Min Tm (°C)"), 4, 0)
-        self.tm_min = QDoubleSpinBox(); self.tm_min.setRange(40, 75); self.tm_min.setValue(52); self.tm_min.setSingleStep(0.5)
-        bg.addWidget(self.tm_min, 4, 1)
-        bg.addWidget(_lbl("Optimal Tm (°C)"), 4, 2)
-        self.tm_opt = QDoubleSpinBox(); self.tm_opt.setRange(40, 75); self.tm_opt.setValue(58); self.tm_opt.setSingleStep(0.5)
-        bg.addWidget(self.tm_opt, 4, 3)
-        bg.addWidget(_lbl("Max Tm (°C)"), 5, 0)
-        self.tm_max = QDoubleSpinBox(); self.tm_max.setRange(40, 75); self.tm_max.setValue(60); self.tm_max.setSingleStep(0.5)
-        bg.addWidget(self.tm_max, 5, 1)
-
-        bg.addWidget(_lbl("Min GC (%)"), 6, 0)
-        self.gc_min = QDoubleSpinBox(); self.gc_min.setRange(0, 100); self.gc_min.setValue(30)
-        bg.addWidget(self.gc_min, 6, 1)
-        bg.addWidget(_lbl("Max GC (%)"), 6, 2)
-        self.gc_max = QDoubleSpinBox(); self.gc_max.setRange(0, 100); self.gc_max.setValue(60)
-        bg.addWidget(self.gc_max, 6, 3)
         bg.setColumnStretch(4, 1)
-        tabs.addTab(basic, "Basic Settings")
+        basic_layout.addWidget(basic_group)
 
-        adv = QWidget()
-        ag = QGridLayout(adv); ag.setSpacing(10); ag.setContentsMargins(12, 12, 12, 12)
-        ag.addWidget(_lbl("Max poly-X"), 0, 0)
-        self.max_poly_x = QSpinBox(); self.max_poly_x.setRange(1, 10); self.max_poly_x.setValue(4)
-        ag.addWidget(self.max_poly_x, 0, 1)
-        ag.addWidget(_lbl("Max self-complementarity"), 0, 2)
-        self.max_self_any = QDoubleSpinBox(); self.max_self_any.setRange(0, 30); self.max_self_any.setValue(8)
-        ag.addWidget(self.max_self_any, 0, 3)
-        ag.addWidget(_lbl("Max 3' self-complementarity"), 1, 0)
-        self.max_self_end = QDoubleSpinBox(); self.max_self_end.setRange(0, 20); self.max_self_end.setValue(3)
-        ag.addWidget(self.max_self_end, 1, 1)
-        ag.addWidget(_lbl("Max pair complementarity"), 1, 2)
-        self.max_pair_any = QDoubleSpinBox(); self.max_pair_any.setRange(0, 30); self.max_pair_any.setValue(8)
-        ag.addWidget(self.max_pair_any, 1, 3)
-        ag.addWidget(_lbl("Max pair 3' complementarity"), 2, 0)
-        self.max_pair_end = QDoubleSpinBox(); self.max_pair_end.setRange(0, 20); self.max_pair_end.setValue(3)
-        ag.addWidget(self.max_pair_end, 2, 1)
-        ag.addWidget(_lbl("Max hairpin Tm (°C)"), 2, 2)
-        self.max_hairpin = QDoubleSpinBox(); self.max_hairpin.setRange(0, 60); self.max_hairpin.setValue(24)
-        ag.addWidget(self.max_hairpin, 2, 3)
-        ag.addWidget(_lbl("Max Tm difference (°C)"), 3, 0)
-        self.max_tm_diff = QDoubleSpinBox(); self.max_tm_diff.setRange(0, 10); self.max_tm_diff.setValue(2)
-        ag.addWidget(self.max_tm_diff, 3, 1)
-        ag.setColumnStretch(4, 1)
-        tabs.addTab(adv, "Advanced Primer3 Parameters")
+        primer_group = QGroupBox("Primer Length")
+        pg = QGridLayout(primer_group); pg.setSpacing(10); pg.setContentsMargins(12, 12, 12, 12)
+        pg.addWidget(_lbl("Min (bp)"), 0, 0)
+        self.primer_min_size = QSpinBox(); self.primer_min_size.setRange(15, 35); self.primer_min_size.setValue(18)
+        pg.addWidget(self.primer_min_size, 0, 1)
+        pg.addWidget(_lbl("Optimal (bp)"), 0, 2)
+        self.primer_opt_size = QSpinBox(); self.primer_opt_size.setRange(15, 35); self.primer_opt_size.setValue(20)
+        pg.addWidget(self.primer_opt_size, 0, 3)
+        pg.addWidget(_lbl("Max (bp)"), 0, 4)
+        self.primer_max_size = QSpinBox(); self.primer_max_size.setRange(15, 35); self.primer_max_size.setValue(25)
+        pg.addWidget(self.primer_max_size, 0, 5)
+        pg.setColumnStretch(6, 1)
+        basic_layout.addWidget(primer_group)
+
+        tm_group = QGroupBox("Melting Temperature (Tm)")
+        tg = QGridLayout(tm_group); tg.setSpacing(10); tg.setContentsMargins(12, 12, 12, 12)
+        tg.addWidget(_lbl("Min (°C)"), 0, 0)
+        self.tm_min = QDoubleSpinBox(); self.tm_min.setRange(40, 75); self.tm_min.setValue(52); self.tm_min.setSingleStep(0.5)
+        tg.addWidget(self.tm_min, 0, 1)
+        tg.addWidget(_lbl("Optimal (°C)"), 0, 2)
+        self.tm_opt = QDoubleSpinBox(); self.tm_opt.setRange(40, 75); self.tm_opt.setValue(58); self.tm_opt.setSingleStep(0.5)
+        tg.addWidget(self.tm_opt, 0, 3)
+        tg.addWidget(_lbl("Max (°C)"), 0, 4)
+        self.tm_max = QDoubleSpinBox(); self.tm_max.setRange(40, 75); self.tm_max.setValue(60); self.tm_max.setSingleStep(0.5)
+        tg.addWidget(self.tm_max, 0, 5)
+        tg.addWidget(_lbl("Max ΔTm (°C)", "Max difference between forward and reverse primer Tm.\nCapillary: 5.0°C, Amplicon: 1.0°C"), 1, 0)
+        self.max_tm_diff = QDoubleSpinBox(); self.max_tm_diff.setRange(0, 100); self.max_tm_diff.setValue(5.0); self.max_tm_diff.setSingleStep(0.5)
+        tg.addWidget(self.max_tm_diff, 1, 1)
+        tg.setColumnStretch(6, 1)
+        basic_layout.addWidget(tm_group)
+
+        gc_group = QGroupBox("GC Content")
+        gcg = QGridLayout(gc_group); gcg.setSpacing(10); gcg.setContentsMargins(12, 12, 12, 12)
+        gcg.addWidget(_lbl("Min GC %"), 0, 0)
+        self.gc_min = QDoubleSpinBox(); self.gc_min.setRange(0, 100); self.gc_min.setValue(40); self.gc_min.setSingleStep(5)
+        gcg.addWidget(self.gc_min, 0, 1)
+        gcg.addWidget(_lbl("Max GC %"), 0, 2)
+        self.gc_max = QDoubleSpinBox(); self.gc_max.setRange(0, 100); self.gc_max.setValue(60); self.gc_max.setSingleStep(5)
+        gcg.addWidget(self.gc_max, 0, 3)
+        gcg.setColumnStretch(4, 1)
+        basic_layout.addWidget(gc_group)
+
+        basic_layout.addStretch()
+        tabs.addTab(basic_tab, "Basic Settings")
+
+        # Advanced settings tab
+        adv_tab = QWidget()
+        adv_layout = QVBoxLayout(adv_tab)
+        adv_layout.setContentsMargins(12, 12, 12, 12)
+
+        sec_group = QGroupBox("Secondary Structure")
+        sg = QGridLayout(sec_group); sg.setSpacing(10); sg.setContentsMargins(12, 12, 12, 12)
+        sg.addWidget(_lbl("Max poly-X run"), 0, 0)
+        self.max_poly_x = QSpinBox(); self.max_poly_x.setRange(1, 10); self.max_poly_x.setValue(5)
+        sg.addWidget(self.max_poly_x, 0, 1)
+        sg.addWidget(_lbl("GC clamp", "Number of G/C bases required at 3' end"), 0, 2)
+        self.gc_clamp = QSpinBox(); self.gc_clamp.setRange(0, 5); self.gc_clamp.setValue(2)
+        sg.addWidget(self.gc_clamp, 0, 3)
+        sg.addWidget(_lbl("Max self-complementarity (any)"), 1, 0)
+        self.max_self_any = QDoubleSpinBox(); self.max_self_any.setRange(0, 12); self.max_self_any.setValue(8); self.max_self_any.setSingleStep(0.5)
+        sg.addWidget(self.max_self_any, 1, 1)
+        sg.addWidget(_lbl("Max self-complementarity (3' end)"), 1, 2)
+        self.max_self_end = QDoubleSpinBox(); self.max_self_end.setRange(0, 12); self.max_self_end.setValue(3); self.max_self_end.setSingleStep(0.5)
+        sg.addWidget(self.max_self_end, 1, 3)
+        sg.addWidget(_lbl("Max hairpin Tm (°C)"), 2, 0)
+        self.max_hairpin = QDoubleSpinBox(); self.max_hairpin.setRange(0, 80); self.max_hairpin.setValue(47); self.max_hairpin.setSingleStep(1)
+        sg.addWidget(self.max_hairpin, 2, 1)
+        sg.setColumnStretch(4, 1)
+        adv_layout.addWidget(sec_group)
+
+        dimer_group = QGroupBox("Primer-Primer Interactions")
+        dg = QGridLayout(dimer_group); dg.setSpacing(10); dg.setContentsMargins(12, 12, 12, 12)
+        dg.addWidget(_lbl("Max pair complementarity (any)"), 0, 0)
+        self.max_pair_any = QDoubleSpinBox(); self.max_pair_any.setRange(0, 12); self.max_pair_any.setValue(8); self.max_pair_any.setSingleStep(0.5)
+        dg.addWidget(self.max_pair_any, 0, 1)
+        dg.addWidget(_lbl("Max pair complementarity (3' end)"), 0, 2)
+        self.max_pair_end = QDoubleSpinBox(); self.max_pair_end.setRange(0, 12); self.max_pair_end.setValue(3); self.max_pair_end.setSingleStep(0.5)
+        dg.addWidget(self.max_pair_end, 0, 3)
+        dg.setColumnStretch(4, 1)
+        adv_layout.addWidget(dimer_group)
+
+        # NEW: Thermodynamics section
+        thermo_group = QGroupBox("Thermodynamic Parameters")
+        thermo_group.setToolTip("Salt and dNTP concentrations affect Tm calculations.\nDefaults: Salt mono 50mM, divalent 0mM, dNTP 0mM")
+        tg = QGridLayout(thermo_group); tg.setSpacing(10); tg.setContentsMargins(12, 12, 12, 12)
+        
+        tg.addWidget(_lbl("Monovalent salt (mM)", "Concentration of monovalent cations (usually Na+, K+)"), 0, 0)
+        self.salt_monovalent = QDoubleSpinBox(); self.salt_monovalent.setRange(0, 200); self.salt_monovalent.setValue(50); self.salt_monovalent.setSingleStep(5)
+        tg.addWidget(self.salt_monovalent, 0, 1)
+        
+        tg.addWidget(_lbl("Divalent salt (mM)", "Concentration of divalent cations (usually Mg2+)"), 0, 2)
+        self.salt_divalent = QDoubleSpinBox(); self.salt_divalent.setRange(0, 20); self.salt_divalent.setValue(0); self.salt_divalent.setSingleStep(0.5)
+        tg.addWidget(self.salt_divalent, 0, 3)
+        
+        tg.addWidget(_lbl("dNTP concentration (mM)", "Concentration of deoxyribonucleotide triphosphates"), 1, 0)
+        self.dntp_conc = QDoubleSpinBox(); self.dntp_conc.setRange(0, 10); self.dntp_conc.setValue(0); self.dntp_conc.setSingleStep(0.1)
+        tg.addWidget(self.dntp_conc, 1, 1)
+        
+        tg.addWidget(_lbl("DNA concentration (nM)", "Concentration of annealing oligos"), 1, 2)
+        self.dna_conc = QDoubleSpinBox(); self.dna_conc.setRange(0, 200); self.dna_conc.setValue(50); self.dna_conc.setSingleStep(5)
+        tg.addWidget(self.dna_conc, 1, 3)
+        
+        tg.addWidget(_lbl("Tm formula", "0 = Breslauer et al 1986\n1 = SantaLucia 1998"), 2, 0)
+        self.tm_formula = QSpinBox(); self.tm_formula.setRange(0, 1); self.tm_formula.setValue(0)
+        tg.addWidget(self.tm_formula, 2, 1)
+        
+        tg.addWidget(_lbl("Salt corrections", "0 = Schildkraut & Lifson 1965\n1 = SantaLucia 1998\n2 = Owczarzy et al 2004"), 2, 2)
+        self.salt_corrections = QSpinBox(); self.salt_corrections.setRange(0, 2); self.salt_corrections.setValue(0)
+        tg.addWidget(self.salt_corrections, 2, 3)
+        
+        tg.setColumnStretch(4, 1)
+        adv_layout.addWidget(thermo_group)
+
+        adv_layout.addStretch()
+        tabs.addTab(adv_tab, "Advanced Settings")
+
         L.addWidget(tabs)
 
-        # Run
-        run_group = QGroupBox("Run")
-        rg = QVBoxLayout(run_group)
-        self.ssr_source_label = QLabel("")
+        # Run controls
+        run_group = QGroupBox("Run Primer Design")
+        run_layout = QVBoxLayout(run_group)
+
+        self.ssr_source_label = QLabel("No SSRs available")
         self.ssr_source_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        rg.addWidget(self.ssr_source_label)
-        run_row = QHBoxLayout()
+        run_layout.addWidget(self.ssr_source_label)
+
+        btn_row = QHBoxLayout()
         self.run_all_btn = QPushButton("Design for all SSRs")
-        self.run_all_btn.setObjectName("primary")
+        self.run_all_btn.setFixedHeight(40)
+        self.run_all_btn.setEnabled(False)
         self.run_all_btn.clicked.connect(lambda: self._run("all"))
         self.run_sel_btn = QPushButton("Design for selected SSRs")
+        self.run_sel_btn.setFixedHeight(40)
+        self.run_sel_btn.setEnabled(False)
         self.run_sel_btn.clicked.connect(lambda: self._run("selected"))
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFixedHeight(40)
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self._cancel)
-        run_row.addWidget(self.run_all_btn); run_row.addWidget(self.run_sel_btn)
-        run_row.addWidget(self.cancel_btn); run_row.addStretch()
-        rg.addLayout(run_row)
+        btn_row.addWidget(self.run_all_btn)
+        btn_row.addWidget(self.run_sel_btn)
+        btn_row.addWidget(self.cancel_btn)
+        btn_row.addStretch()
+        run_layout.addLayout(btn_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(8)
+        run_layout.addWidget(self.progress_bar)
+
         self.run_status = QLabel("")
         self.run_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        rg.addWidget(self.run_status)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False); self.progress_bar.setFixedHeight(6)
-        rg.addWidget(self.progress_bar)
+        run_layout.addWidget(self.run_status)
+
         L.addWidget(run_group)
 
         # Results
@@ -305,25 +413,17 @@ class PrimerPanel(QWidget):
 
         filter_group = QGroupBox("Quality Filters")
         fg = QGridLayout(filter_group); fg.setSpacing(8); fg.setContentsMargins(10, 10, 10, 10)
-        fg.addWidget(_lbl("Min 3' stability (kcal/mol)"), 0, 0)
+        fg.addWidget(_lbl("Min 3' stability (kcal/mol)", "Minimum 3' end stability"), 0, 0)
         self.dg_min = QDoubleSpinBox(); self.dg_min.setRange(0, 20); self.dg_min.setValue(0); self.dg_min.setSingleStep(0.5)
         self.dg_min.valueChanged.connect(self._on_filter_changed)
         fg.addWidget(self.dg_min, 0, 1)
-        fg.addWidget(_lbl("Max 3' stability (kcal/mol)"), 0, 2)
+        fg.addWidget(_lbl("Max 3' stability (kcal/mol)", "Maximum 3' end stability"), 0, 2)
         self.dg_max = QDoubleSpinBox(); self.dg_max.setRange(0, 20); self.dg_max.setValue(20); self.dg_max.setSingleStep(0.5)
         self.dg_max.valueChanged.connect(self._on_filter_changed)
         fg.addWidget(self.dg_max, 0, 3)
-        fg.addWidget(_lbl("Min GC clamp"), 1, 0)
-        self.clamp_min = QSpinBox(); self.clamp_min.setRange(0, 5); self.clamp_min.setValue(0)
-        self.clamp_min.valueChanged.connect(self._on_filter_changed)
-        fg.addWidget(self.clamp_min, 1, 1)
-        fg.addWidget(_lbl("Max GC clamp"), 1, 2)
-        self.clamp_max = QSpinBox(); self.clamp_max.setRange(0, 5); self.clamp_max.setValue(5)
-        self.clamp_max.valueChanged.connect(self._on_filter_changed)
-        fg.addWidget(self.clamp_max, 1, 3)
         self.filter_status = QLabel("")
         self.filter_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
-        fg.addWidget(self.filter_status, 2, 0, 1, 4)
+        fg.addWidget(self.filter_status, 1, 0, 1, 4)
         fg.setColumnStretch(4, 1)
         res_layout.addWidget(filter_group)
 
@@ -347,6 +447,10 @@ class PrimerPanel(QWidget):
 
         L.addWidget(self.results_group)
         L.addStretch()
+        
+        # Initialize Capillary mode defaults (button is already checked but callback wasn't triggered)
+        self._on_mode_toggled(True, "capillary")
+        
         self._refresh()
 
     def _run(self, mode):
@@ -386,12 +490,19 @@ class PrimerPanel(QWidget):
             "PRIMER_MIN_GC":             self.gc_min.value(),
             "PRIMER_MAX_GC":             self.gc_max.value(),
             "PRIMER_MAX_POLY_X":         self.max_poly_x.value(),
+            "PRIMER_GC_CLAMP":           self.gc_clamp.value(),
             "PRIMER_MAX_SELF_ANY":       self.max_self_any.value(),
             "PRIMER_MAX_SELF_END":       self.max_self_end.value(),
             "PRIMER_PAIR_MAX_COMPL_ANY": self.max_pair_any.value(),
             "PRIMER_PAIR_MAX_COMPL_END": self.max_pair_end.value(),
             "PRIMER_MAX_HAIRPIN_TH":     self.max_hairpin.value(),
             "PRIMER_PAIR_MAX_DIFF_TM":   self.max_tm_diff.value(),
+            "PRIMER_SALT_MONOVALENT":    self.salt_monovalent.value(),
+            "PRIMER_SALT_DIVALENT":      self.salt_divalent.value(),
+            "PRIMER_DNTP_CONC":          self.dntp_conc.value(),
+            "PRIMER_DNA_CONC":           self.dna_conc.value(),
+            "PRIMER_TM_FORMULA":         self.tm_formula.value(),
+            "PRIMER_SALT_CORRECTIONS":   self.salt_corrections.value(),
         }
         params = {
             "flank":        self.flank.value(),
@@ -408,67 +519,57 @@ class PrimerPanel(QWidget):
         self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
         mode_tag = " [Amplicon]" if self._amplicon_mode else " [Capillary]"
-        self._set_status(f"Designing primers for {len(ssr_list):,} SSRs{mode_tag}...", TEXT_SECONDARY)
-        self.mw.set_status(f"Running Primer3{mode_tag}...")
+        self._set_status(f"Running Primer3...{mode_tag}", TEXT_SECONDARY)
+        self.mw.set_status("Designing primers...")
+
         self._worker = PrimerWorker(self.state.genome, ssr_list, params)
-        self._worker.progress.connect(self._on_progress, Qt.ConnectionType.QueuedConnection)
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.start()
 
     def _on_progress(self, done, total):
-        self.progress_bar.setMaximum(total); self.progress_bar.setValue(done)
-        self._set_status(f"Designing: {done:,} / {total:,}", TEXT_SECONDARY)
-        QApplication.processEvents()
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(done)
+        if done % 100 == 0 or done == total:
+            QApplication.processEvents()
 
-    def _on_done(self, res, elapsed):
-        primers   = res["success"]
-        n_failed  = len(res["failed"])
-        n_skipped = len(res.get("skipped", []))
-        self.state.clear_downstream_of_primers()
-        self.state.primer_results          = primers
-        self.state.filtered_primer_results = primers
-        self.state.primer_version         += 1
-        self.state.workflow_mode           = "capillary" if not self._amplicon_mode else "amplicon"
-
-        if primers:
-            import pandas as pd
-            df = pd.DataFrame(primers)
-            if "left_3end_dg" in df.columns:
-                all_dg = pd.concat([df["left_3end_dg"], df["right_3end_dg"]]).dropna()
-                self._filter_updating = True
-                for w in [self.dg_min, self.dg_max, self.clamp_min, self.clamp_max]:
-                    w.blockSignals(True)
-                self.dg_min.setValue(0.0)
-                self.dg_max.setValue(min(20.0, round(float(all_dg.max()) + 1, 1)))
-                self.clamp_min.setValue(0)
-                self.clamp_max.setValue(5)
-                for w in [self.dg_min, self.dg_max, self.clamp_min, self.clamp_max]:
-                    w.blockSignals(False)
-                self._filter_updating = False
-
-        self._apply_filters()
+    def _on_done(self, result, elapsed):
+        self.state.primer_results = result["success"]
+        self.state.filtered_primer_results = None
+        self.state.primer_version += 1
         self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False); self.progress_bar.setVisible(False)
-        msg = f"{len(primers):,} primer pairs designed in {elapsed:.1f}s"
-        if n_skipped: msg += f" — {n_skipped:,} skipped"
-        if n_failed:  msg += f" — {n_failed:,} failed"
-        self._set_status(msg, SUCCESS)
-        self.mw.set_status(msg); self.mw.on_step_complete(3)
-        self._cleanup_worker(); self._refresh()
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
+        n = len(result["success"])
+        n_failed = len(result.get("failed", []))
+        n_skipped = len(result.get("skipped", []))
+        n_ssrs = n + n_failed  # Total SSRs that were attempted
+        status_parts = [f"{n:,} primer pairs designed for {n_ssrs:,} SSRs in {elapsed:.1f}s"]
+        if n_skipped > 0:
+            status_parts.append(f"{n_skipped:,} SSRs skipped (low-complexity flanks)")
+        self._set_status(" — ".join(status_parts), SUCCESS)
+        self.mw.set_status(f"Primer design complete — {n:,} pairs designed")
+        self.mw.on_step_complete(3)
+        self._cleanup_worker()
+        self._refresh()
 
     def _on_error(self, msg):
         self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False); self.progress_bar.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
         self._set_status(f"Error: {msg}", ERROR)
         self.mw.set_status("Primer design failed")
         self._cleanup_worker()
 
     def _cancel(self):
         if self._worker:
-            self._worker.terminate(); self._worker.wait(); self._cleanup_worker()
+            self._worker.terminate()
+            self._worker.wait()
+            self._cleanup_worker()
         self.run_all_btn.setEnabled(True); self.run_sel_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False); self.progress_bar.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
         self._set_status("Cancelled", WARNING)
         self.mw.set_status("Primer design cancelled")
 
@@ -496,53 +597,42 @@ class PrimerPanel(QWidget):
             self._filter_updating = False
 
     def _apply_filters(self):
+        """Apply quality filters to primer results."""
         if not self.state.primer_results:
             return
         import pandas as pd
 
         try:
-            dg_min   = float(self.dg_min.value())
-            dg_max   = float(self.dg_max.value())
-            clamp_lo = int(self.clamp_min.value())
-            clamp_hi = int(self.clamp_max.value())
+            dg_min = float(self.dg_min.value())
+            dg_max = float(self.dg_max.value())
         except Exception:
             return
 
         if dg_min > dg_max:
             dg_min, dg_max = dg_max, dg_min
-        if clamp_lo > clamp_hi:
-            clamp_lo, clamp_hi = clamp_hi, clamp_lo
 
         df = pd.DataFrame(self.state.primer_results)
         total = len(df)
 
-        # 3' stability filter
+        # 3' stability filter - with error handling for missing or invalid values
         if "left_3end_dg" in df.columns and "right_3end_dg" in df.columns:
-            mask = (
-                df["left_3end_dg"].between(dg_min, dg_max) &
-                df["right_3end_dg"].between(dg_min, dg_max)
-            )
-            df = df[mask].copy()
-
-        # GC clamp filter (only if primers exist and DataFrame not empty)
-        if "left_primer" in df.columns and "right_primer" in df.columns and not df.empty:
-            def _gc_clamp(seq):
-                try:
-                    s = str(seq) if seq is not None else ""
-                    return sum(1 for b in s[-5:].upper() if b in "GC")
-                except Exception:
-                    return 0
-
-            # Use .loc to avoid SettingWithCopyWarning
-            df = df.copy()
-            df["left_gc_clamp"] = df["left_primer"].apply(_gc_clamp)
-            df["right_gc_clamp"] = df["right_primer"].apply(_gc_clamp)
-
-            mask = (
-                df["left_gc_clamp"].between(clamp_lo, clamp_hi) &
-                df["right_gc_clamp"].between(clamp_lo, clamp_hi)
-            )
-            df = df[mask].copy()
+            try:
+                # Convert to numeric, coercing errors to NaN
+                df["left_3end_dg"] = pd.to_numeric(df["left_3end_dg"], errors='coerce')
+                df["right_3end_dg"] = pd.to_numeric(df["right_3end_dg"], errors='coerce')
+                
+                # Only filter rows where both values are valid numbers
+                mask = (
+                    df["left_3end_dg"].notna() &
+                    df["right_3end_dg"].notna() &
+                    df["left_3end_dg"].between(dg_min, dg_max) &
+                    df["right_3end_dg"].between(dg_min, dg_max)
+                )
+                df = df[mask].copy()
+            except Exception as e:
+                # If filtering fails, log the error and use all primers
+                print(f"Warning: 3' stability filter failed: {e}")
+                df = pd.DataFrame(self.state.primer_results)
 
         # Update filtered results
         if df.empty:
@@ -571,7 +661,8 @@ class PrimerPanel(QWidget):
         if self.state.primer_version == self._last_rendered_version: return
         self._last_rendered_version = self.state.primer_version
         self.results_group.setVisible(True)
-        self._apply_filters(); self._populate_table()
+        self._apply_filters()
+        self._populate_table()
 
     def _populate_table(self):
         if not self.state.has_primers: return
@@ -590,6 +681,7 @@ class PrimerPanel(QWidget):
             "motif": "Motif", "left_primer": "Forward", "right_primer": "Reverse",
             "product_size": "Size", "left_tm": "Fwd Tm", "right_tm": "Rev Tm",
             "left_gc": "Fwd GC", "right_gc": "Rev GC",
+            "left_3end_dg": "Fwd 3' ΔG", "right_3end_dg": "Rev 3' ΔG",
         }
 
         # Add Chromosome column if mapping exists
@@ -632,8 +724,20 @@ class PrimerPanel(QWidget):
                     val = self.state.get_display_name(contig)
                 else:
                     val = display_df.iat[row_idx, display_df.columns.get_loc(col)]
-                text = f"{val:.2f}" if isinstance(val, float) else ("" if val is None else str(val))
-                self.table.setItem(row_idx, col_idx, QTableWidgetItem(text))
+                
+                # Format text for display
+                if isinstance(val, float):
+                    text = f"{val:.2f}"
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif isinstance(val, int):
+                    text = str(val)
+                    item = NumericTableWidgetItem(text, numeric_value=val)
+                elif val is None:
+                    item = QTableWidgetItem("")
+                else:
+                    item = QTableWidgetItem(str(val))
+                
+                self.table.setItem(row_idx, col_idx, item)
         self.table.setSortingEnabled(True)
 
     def _download_csv(self):
