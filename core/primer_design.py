@@ -34,14 +34,15 @@ import re
 # RECOMMENDED_PRESET - Used for Capillary Electrophoresis mode (default)
 # Standard parameters for SSR genotyping with fragment analysis
 RECOMMENDED_PRESET = {
-    # Core primer constraints
+    # Core primer constraints - MATCHED TO KRAIT2 ACTUAL SETTINGS
     "PRIMER_MIN_SIZE": 18,
-    "PRIMER_OPT_SIZE": 20,
+    "PRIMER_OPT_SIZE": 20,      # Krait2 screenshot shows 20, not 22 as stated in paper
     "PRIMER_MAX_SIZE": 25,
     "PRIMER_MIN_TM": 52.0,
     "PRIMER_OPT_TM": 58.0,
     "PRIMER_MAX_TM": 60.0,
     "PRIMER_MIN_GC": 30.0,
+    "PRIMER_OPT_GC": 40.0,      # Krait2 uses 40%
     "PRIMER_MAX_GC": 60.0,
     
     # Secondary structure
@@ -56,7 +57,7 @@ RECOMMENDED_PRESET = {
     # Pair constraints
     "PRIMER_PAIR_MAX_DIFF_TM": 5.0,
     
-    # Thermodynamic parameters
+    # Thermodynamic parameters - OLD DEFAULTS to match Krait2
     "PRIMER_SALT_MONOVALENT": 50.0,
     "PRIMER_SALT_DIVALENT": 0.0,
     "PRIMER_DNTP_CONC": 0.0,
@@ -141,6 +142,8 @@ def calc_tm(seq):
     return round(primer3.calc_tm(seq), 2)
 
 
+# Nearest-neighbor thermodynamic parameters (kcal/mol)
+# These are NEGATIVE values - more negative = stronger binding
 _NN_DG = {
     "AA": -1.0,  "AT": -0.88, "TA": -0.58, "CA": -1.45,
     "GT": -1.44, "CT": -1.28, "GA": -1.30, "CG": -2.17,
@@ -151,17 +154,53 @@ _NN_DG = {
 
 def calc_3prime_dg(seq):
     """
-    Calculate 3' end stability using simplified nearest-neighbor thermodynamics.
+    Calculate 3' end stability using nearest-neighbor thermodynamics.
     
-    Sums the absolute ΔG values for the last 3 dinucleotides (4 bases) of the primer.
-    Lower values = less stable 3' end, higher values = more stable 3' end.
+    Evaluates the last 5 nucleotides (4 dinucleotide pairs) of the primer
+    and sums their free energy (ΔG) values.
     
-    This custom calculation gives more reasonable values (typically 3-6 kcal/mol)
-    compared to Primer3's PRIMER_END_STABILITY which uses a different scale.
+    Returns:
+        ΔG in kcal/mol (NEGATIVE values)
+        More negative = more stable binding
+        Less negative = weaker binding
+    
+    Optimal range: -9 to -6 kcal/mol
+        - Too stable (< -9 kcal/mol): Risk of non-specific priming
+        - Too weak (> -6 kcal/mol): Poor primer extension by polymerase
+    
+    Note: Uses simplified nearest-neighbor parameters. For more accurate
+    calculations accounting for salt concentration, use primer3.calc_end_stability()
     """
-    tetramer = seq[-4:].upper()
-    total    = sum(abs(_NN_DG.get(tetramer[i:i+2], -1.0)) for i in range(3))
+    if len(seq) < 5:
+        return 0.0
+    
+    pentamer = seq[-5:].upper()
+    # Sum the ΔG values (keep them NEGATIVE - do NOT use abs())
+    total = sum(_NN_DG.get(pentamer[i:i+2], -1.0) for i in range(4))
     return round(total, 2)
+
+
+def calc_3prime_dg_accurate(seq, mv_conc=50.0, dv_conc=0.0):
+    """
+    Calculate 3' end stability using Primer3's thermodynamic engine.
+    
+    This is more accurate than calc_3prime_dg() as it accounts for:
+    - Salt concentration effects
+    - Temperature-dependent parameters
+    - Terminal base penalties
+    
+    Args:
+        seq: Primer sequence
+        mv_conc: Monovalent cation concentration in mM (default 50.0)
+        dv_conc: Divalent cation concentration in mM (default 0.0)
+    
+    Returns:
+        ΔG in kcal/mol (NEGATIVE values)
+    """
+    # primer3.calc_end_stability returns a ThermoResult object
+    # Extract the dg (delta G) attribute
+    result = primer3.calc_end_stability(seq, mv_conc, dv_conc)
+    return round(result.dg, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +275,10 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
     success   = []
     found_any = False
 
+    # Get salt concentrations for accurate 3' stability calculation
+    mv_conc = opts.get("PRIMER_SALT_MONOVALENT", 50.0)
+    dv_conc = opts.get("PRIMER_SALT_DIVALENT", 0.0)
+
     for rank in range(num_pairs):
         left_key = f"PRIMER_LEFT_{rank}_SEQUENCE"
         if left_key not in result:
@@ -267,9 +310,10 @@ def _design_one(ssr, template, left_bound, target_start, target_len,
             "right_gc":        calc_gc(right_seq),
             "left_tm":         round(result[f"PRIMER_LEFT_{rank}_TM"], 2),
             "right_tm":        round(result[f"PRIMER_RIGHT_{rank}_TM"], 2),
+            # Use standard thermodynamic ΔG calculation (negative values, -6 to -9 kcal/mol)
             "left_3end_dg":    calc_3prime_dg(left_seq),
             "right_3end_dg":   calc_3prime_dg(right_seq),
-            "amplicon_mode":        amplicon_mode,
+            "amplicon_mode":   amplicon_mode,
         }
 
         # Store tailed sequences separately if amplicon mode with adapters
@@ -421,3 +465,208 @@ def primers_to_amplicon_fasta(primer_results):
         lines.append(f">SSR{ssr_id}|R|tailed")
         lines.append(right)
     return "\n".join(lines) + "\n" if lines else ""
+
+
+def calculate_primer_quality_score(primer_rec, mode="balanced"):
+    """
+    Calculate a quality score for a primer pair based on multiple criteria.
+    Higher score = better quality.
+    
+    Args:
+        primer_rec: Dictionary containing primer pair data
+        mode: Scoring strategy - "balanced", "amplicon", or "capillary"
+    
+    Returns:
+        Dictionary with score, rank category, and score breakdown
+    
+    Scoring criteria:
+        - 3' end stability (optimal range: -8.5 to -6.5 kcal/mol)
+        - Tm matching between primers (closer = better)
+        - GC content balance (45-55% optimal)
+        - Product size (smaller often better for amplicon sequencing)
+        - Tm in optimal range (57-60°C)
+    """
+    score = 0
+    breakdown = {}
+    
+    # Extract values
+    left_dg = primer_rec.get("left_3end_dg", 0)
+    right_dg = primer_rec.get("right_3end_dg", 0)
+    left_tm = primer_rec.get("left_tm", 0)
+    right_tm = primer_rec.get("right_tm", 0)
+    left_gc = primer_rec.get("left_gc", 0)
+    right_gc = primer_rec.get("right_gc", 0)
+    product_size = primer_rec.get("product_size", 0)
+    
+    # 1. 3' End Stability (up to 20 points)
+    # Optimal range: -8.5 to -6.5 kcal/mol
+    left_dg_score = 0
+    right_dg_score = 0
+    
+    if -8.5 <= left_dg <= -6.5:
+        left_dg_score = 10
+    elif -9.0 <= left_dg <= -6.0:
+        left_dg_score = 7
+    elif -10.0 <= left_dg <= -5.5:
+        left_dg_score = 4
+    else:
+        left_dg_score = 0
+    
+    if -8.5 <= right_dg <= -6.5:
+        right_dg_score = 10
+    elif -9.0 <= right_dg <= -6.0:
+        right_dg_score = 7
+    elif -10.0 <= right_dg <= -5.5:
+        right_dg_score = 4
+    else:
+        right_dg_score = 0
+    
+    score += left_dg_score + right_dg_score
+    breakdown["3end_stability"] = left_dg_score + right_dg_score
+    
+    # 2. Tm Matching (up to 15 points)
+    # Primers should have similar Tm
+    tm_diff = abs(left_tm - right_tm)
+    if tm_diff < 1.0:
+        tm_match_score = 15
+    elif tm_diff < 2.0:
+        tm_match_score = 10
+    elif tm_diff < 3.0:
+        tm_match_score = 5
+    else:
+        tm_match_score = 0
+    
+    score += tm_match_score
+    breakdown["tm_matching"] = tm_match_score
+    
+    # 3. Tm in Optimal Range (up to 15 points)
+    # Optimal: 57-60°C
+    left_tm_score = 0
+    right_tm_score = 0
+    
+    if 57 <= left_tm <= 60:
+        left_tm_score = 7.5
+    elif 55 <= left_tm <= 62:
+        left_tm_score = 5
+    elif 52 <= left_tm <= 65:
+        left_tm_score = 2
+    
+    if 57 <= right_tm <= 60:
+        right_tm_score = 7.5
+    elif 55 <= right_tm <= 62:
+        right_tm_score = 5
+    elif 52 <= right_tm <= 65:
+        right_tm_score = 2
+    
+    score += left_tm_score + right_tm_score
+    breakdown["tm_range"] = left_tm_score + right_tm_score
+    
+    # 4. GC Content Balance (up to 20 points)
+    # Optimal: 45-55%
+    left_gc_score = 0
+    right_gc_score = 0
+    
+    if 45 <= left_gc <= 55:
+        left_gc_score = 10
+    elif 40 <= left_gc <= 60:
+        left_gc_score = 7
+    elif 35 <= left_gc <= 65:
+        left_gc_score = 4
+    
+    if 45 <= right_gc <= 55:
+        right_gc_score = 10
+    elif 40 <= right_gc <= 60:
+        right_gc_score = 7
+    elif 35 <= right_gc <= 65:
+        right_gc_score = 4
+    
+    score += left_gc_score + right_gc_score
+    breakdown["gc_content"] = left_gc_score + right_gc_score
+    
+    # 5. Product Size (up to 15 points)
+    # Mode-specific scoring
+    if mode == "amplicon":
+        # Amplicon sequencing: smaller is better (80-150bp ideal)
+        if 80 <= product_size <= 150:
+            size_score = 15
+        elif 150 < product_size <= 200:
+            size_score = 10
+        elif 200 < product_size <= 250:
+            size_score = 5
+        else:
+            size_score = 0
+    elif mode == "capillary":
+        # Capillary: medium sizes often better (150-300bp)
+        if 150 <= product_size <= 300:
+            size_score = 15
+        elif 100 <= product_size < 150 or 300 < product_size <= 350:
+            size_score = 10
+        else:
+            size_score = 5
+    else:  # balanced
+        # Balanced: moderate preference for smaller
+        if 100 <= product_size <= 200:
+            size_score = 15
+        elif 200 < product_size <= 300:
+            size_score = 10
+        else:
+            size_score = 5
+    
+    score += size_score
+    breakdown["product_size"] = size_score
+    
+    # 6. Pair Rank Bonus (up to 15 points)
+    # Primer3 ranks pairs by quality - rank 0 is best
+    pair_rank = primer_rec.get("pair_rank", 0)
+    if pair_rank == 0:
+        rank_score = 15
+    elif pair_rank == 1:
+        rank_score = 10
+    elif pair_rank == 2:
+        rank_score = 5
+    else:
+        rank_score = 0
+    
+    score += rank_score
+    breakdown["primer3_rank"] = rank_score
+    
+    # Total possible: 100 points
+    # Determine quality category
+    if score >= 80:
+        category = "Excellent"
+    elif score >= 65:
+        category = "Good"
+    elif score >= 50:
+        category = "Acceptable"
+    else:
+        category = "Poor"
+    
+    return {
+        "quality_score": round(score, 1),
+        "quality_category": category,
+        "score_breakdown": breakdown,
+    }
+
+
+def add_quality_scores_to_primers(primer_results, mode="balanced"):
+    """
+    Add quality scores to a list of primer results.
+    
+    Args:
+        primer_results: List of primer result dictionaries
+        mode: Scoring mode - "balanced", "amplicon", or "capillary"
+    
+    Returns:
+        List of primer results with added quality_score and quality_category fields
+    """
+    scored_primers = []
+    for primer in primer_results:
+        primer_copy = primer.copy()
+        score_data = calculate_primer_quality_score(primer, mode=mode)
+        primer_copy["quality_score"] = score_data["quality_score"]
+        primer_copy["quality_category"] = score_data["quality_category"]
+        # Optionally store breakdown for detailed analysis
+        primer_copy["score_breakdown"] = score_data["score_breakdown"]
+        scored_primers.append(primer_copy)
+    
+    return scored_primers

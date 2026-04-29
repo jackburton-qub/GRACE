@@ -108,11 +108,11 @@ PRESET_SPECIFICITY = {
     "Amplicons": SpecificityParams(
         min_product=100,
         max_product=300,
-        max_mismatches=2,              # Stricter: allow fewer mismatches (was 3)
-        min_align_len=17,              # Stricter: longer minimum alignment (was 16)
-        min_identity=90.0,             # Stricter: higher identity required (was 85.0)
+        max_mismatches=2,              # Allow 2 mismatches - balanced
+        min_align_len=17,              # 17bp minimum alignment
+        min_identity=85.0,             # 85% identity - tolerant enough for real genomes
         allow_offtarget_amplicons=False,
-        max_offtarget_amplicon_size=1000,
+        max_offtarget_amplicon_size=500,  # 500bp - strict for amplicon mode (was 1000)
         pass_mode="amplicons",         # Product-based validation
         max_total_hits=1,              # Not used in amplicons mode
     ),
@@ -133,9 +133,9 @@ PRESET_BLAST = {
     "Amplicons": BlastParams(
         task="blastn-short",
         word_size=7,
-        evalue=0.001,                  # Stricter: lower e-value (was 0.01)
+        evalue=0.01,                   # Changed from 0.001 to 0.01 for better sensitivity
         reward=1,
-        penalty=-3,                    # Stricter: harsher penalty (was -2)
+        penalty=-2,                    # Standard penalty (was -3, too harsh)
         gapopen=5,
         gapextend=2,
         dust="no",                     # Keep off for SSR primers

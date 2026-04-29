@@ -187,11 +187,14 @@ class SpecificityPanel(QWidget):
         sg = QGridLayout(settings_group)
         sg.setSpacing(10); sg.setContentsMargins(12, 12, 12, 12)
 
-        sg.addWidget(_lbl("Max locations per primer",
+        # Max locations per primer label - we'll update its style when mode changes
+        self.max_hits_label = _lbl("Max locations per primer",
             "Hits mode: Maximum genomic locations each primer may map to and still pass.\n"
-            "Amplicons mode: Not used (primers can bind multiple locations if only 1 amplicon forms)."), 0, 0)
+            "Amplicons mode: Disabled — primers can bind multiple locations as long as only 1 in-range amplicon forms.")
+        sg.addWidget(self.max_hits_label, 0, 0)
         self.max_hits = QSpinBox(); self.max_hits.setRange(1, 10); self.max_hits.setValue(1)
         self.max_hits.setEnabled(False)  # Disabled by default (Amplicons mode is default)
+        self.max_hits.setToolTip("This parameter is only used in Hits mode.\nIn Amplicons mode, primers can match multiple locations.")
         sg.addWidget(self.max_hits, 0, 1)
 
         sg.addWidget(_lbl("Max mismatches",
@@ -222,8 +225,8 @@ class SpecificityPanel(QWidget):
         sg.addWidget(self.word_size, 3, 1)
 
         sg.addWidget(_lbl("E-value",
-            "Maximum E-value for a BLAST hit to be reported.\n0.001 is now standard for both amplicon and hits mode."), 3, 2)
-        self.evalue = QDoubleSpinBox(); self.evalue.setDecimals(4); self.evalue.setRange(0.0001, 1.0); self.evalue.setSingleStep(0.001); self.evalue.setValue(0.001)
+            "Maximum E-value for a BLAST hit to be reported.\n0.01 is now standard for both amplicon and hits mode."), 3, 2)
+        self.evalue = QDoubleSpinBox(); self.evalue.setDecimals(4); self.evalue.setRange(0.0001, 1.0); self.evalue.setSingleStep(0.001); self.evalue.setValue(0.01)
         sg.addWidget(self.evalue, 3, 3)
 
         sg.addWidget(_lbl("Dust filter",
@@ -268,6 +271,10 @@ class SpecificityPanel(QWidget):
         L.addWidget(self.status_label)
 
         L.addStretch()
+        
+        # Initialize Amplicons mode defaults (button is already checked but callback wasn't triggered)
+        self._on_mode_toggled(True, "amplicons")
+        
         self._refresh()
 
     # ---------------------------------------------------------
@@ -287,6 +294,8 @@ class SpecificityPanel(QWidget):
             )
             # Disable max_hits control - not relevant in amplicons mode
             self.max_hits.setEnabled(False)
+            # Grey out the label visually
+            self.max_hits_label.setStyleSheet(f"color: {TEXT_SECONDARY}44; font-size: {FONT_SIZE_SMALL}pt;")
         else:  # hits
             self._btn_amplicons.setChecked(False)
             self._mode_desc.setText(
@@ -295,6 +304,8 @@ class SpecificityPanel(QWidget):
             )
             # Enable max_hits control - relevant in hits mode
             self.max_hits.setEnabled(True)
+            # Restore normal label color
+            self.max_hits_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
         
         # Update settings to match preset
         from core.primer_specificity_blast import PRESET_SPECIFICITY, PRESET_BLAST

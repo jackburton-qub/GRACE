@@ -413,13 +413,31 @@ class PrimerPanel(QWidget):
 
         filter_group = QGroupBox("Quality Filters")
         fg = QGridLayout(filter_group); fg.setSpacing(8); fg.setContentsMargins(10, 10, 10, 10)
-        fg.addWidget(_lbl("Min 3' stability (kcal/mol)", "Minimum 3' end stability"), 0, 0)
-        self.dg_min = QDoubleSpinBox(); self.dg_min.setRange(0, 20); self.dg_min.setValue(0); self.dg_min.setSingleStep(0.5)
-        self.dg_min.valueChanged.connect(self._on_filter_changed)
+        
+        # Tooltip explaining 3' end stability
+        dg_tooltip = (
+            "3' end stability (ΔG in kcal/mol)\n\n"
+            "More negative = stronger binding at primer's 3' end\n"
+            "Less negative = weaker binding\n\n"
+            "Recommended range: -9 to -6 kcal/mol\n"
+            "• Too stable (< -9): Risk of non-specific priming\n"
+            "• Too weak (> -6): Poor extension by polymerase\n\n"
+            "The 3' end is critical because DNA polymerase extends from here.\n"
+            "If binding is too weak, the primer dissociates before extension.\n"
+            "If too strong, the primer may bind to partially matched sequences."
+        )
+        
+        fg.addWidget(_lbl("Min 3' ΔG (kcal/mol)", dg_tooltip), 0, 0)
+        self.dg_min = QDoubleSpinBox(); self.dg_min.setRange(-20, 0); self.dg_min.setValue(-9); self.dg_min.setSingleStep(0.5)
+        self.dg_min.setToolTip(dg_tooltip)
+        # Use editingFinished instead of valueChanged to prevent constant re-filtering
+        self.dg_min.editingFinished.connect(self._on_filter_changed)
         fg.addWidget(self.dg_min, 0, 1)
-        fg.addWidget(_lbl("Max 3' stability (kcal/mol)", "Maximum 3' end stability"), 0, 2)
-        self.dg_max = QDoubleSpinBox(); self.dg_max.setRange(0, 20); self.dg_max.setValue(20); self.dg_max.setSingleStep(0.5)
-        self.dg_max.valueChanged.connect(self._on_filter_changed)
+        fg.addWidget(_lbl("Max 3' ΔG (kcal/mol)", dg_tooltip), 0, 2)
+        self.dg_max = QDoubleSpinBox(); self.dg_max.setRange(-20, 0); self.dg_max.setValue(-6); self.dg_max.setSingleStep(0.5)
+        self.dg_max.setToolTip(dg_tooltip)
+        # Use editingFinished instead of valueChanged to prevent constant re-filtering
+        self.dg_max.editingFinished.connect(self._on_filter_changed)
         fg.addWidget(self.dg_max, 0, 3)
         self.filter_status = QLabel("")
         self.filter_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SMALL}pt;")
